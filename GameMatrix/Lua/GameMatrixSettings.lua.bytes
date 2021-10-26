@@ -1,0 +1,187 @@
+require ("Common")
+require ("JsonManager")
+require ("EventDispatcher")
+
+local MatrixSettings = {};
+MatrixSettings.ParentPath = ""
+MatrixSettings.MatrixName = "GameMatrix"
+MatrixSettings.CurMatrixInfo = {}
+MatrixSettings.MatrixInfoList = {}
+
+---- 设置业务使用的UI类型(按需设置)
+function MatrixSettings.GetUIType()
+    return "NGUI";
+    --return "UGUI";
+end
+
+---- 是否使用计时器实现倒计时功能(按需设置)
+function MatrixSettings.GetCountdownSwitch()
+    -- return false;
+    return true;
+end
+
+---- 设置module字段(按需设置)
+function MatrixSettings.GetModuleValua(protocol)
+	local moduleValueList = {}
+	moduleValueList["default"] = "NewInformationPanel"
+	moduleValueList["gameTab"] = "NewInformationPanel"
+
+	return moduleValueList[protocol.module] or moduleValueList["default"]
+end
+
+---- 设置tab字段(按需设置)
+function MatrixSettings.GetTabValue(protocol)
+	local moduleValue = MatrixSettings.GetModuleValua(protocol)
+
+    return moduleValue .. "_" .. protocol.tab;
+end
+
+---- 注册/注销入口协议(按需设置)
+function MatrixSettings.SendShowEntranceProtocol(protocol)
+	local newProtocol = {};
+	newProtocol.type = "ShowIcon";
+	newProtocol.content = tostring(protocol.content) or "0";
+	newProtocol.module = MatrixSettings.GetModuleValua(protocol)
+	newProtocol.tab = MatrixSettings.GetTabValue(protocol)
+	newProtocol.showName = tostring(protocol.showName);
+    newProtocol.showPriorit = MatrixSettings.TransSortId(protocol);
+	newProtocol.flag = MatrixSettings.TransTag(protocol);
+	Common.CallGame(JsonManager.EncodeJson(newProtocol));
+
+	MatrixSettings.HandleMatrixInfoList(newProtocol, protocol)
+end
+
+---- 显示/隐藏小红点协议(按需设置)
+function MatrixSettings.SendShowRedpointProtocol(protocol)
+	local newProtocol = {};
+	newProtocol.type = "ShowRedPoint";
+	newProtocol.content = tostring(protocol.content) or "0";
+	newProtocol.module = MatrixSettings.GetModuleValua(protocol)
+	newProtocol.tab = MatrixSettings.GetTabValue(protocol)
+	Common.CallGame(JsonManager.EncodeJson(newProtocol));
+
+	MatrixSettings.HandleMatrixInfoList(newProtocol, protocol)
+end
+
+---- 关闭落地页协议(按需设置)
+function MatrixSettings.SendCloseActionProtocol(protocol)
+	local newProtocol = {};
+	newProtocol.type = "CloseGamePanel";
+	newProtocol.content = MatrixSettings.GetModuleValua(protocol)
+	Common.CallGame(JsonManager.EncodeJson(newProtocol));
+end
+
+---- 显示loading界面协议(按需设置)
+function MatrixSettings.ShowLoadingPanel()
+    local newProtocol = {};
+    newProtocol.type = "pandoraShowLoading";
+    newProtocol.content = "1";
+    newProtocol.info = "Loading...";
+	Common.CallGame(JsonManager.EncodeJson(newProtocol));
+end
+
+---- 隐藏loading界面协议(按需设置)
+function MatrixSettings.HideLoadingPanel()
+    local newProtocol = {};
+    newProtocol.type = "pandoraShowLoading";
+    newProtocol.content = "0";
+    newProtocol.info = "Loading...";
+	Common.CallGame(JsonManager.EncodeJson(newProtocol));
+end
+
+---- 模拟客户端分发消息(按需设置)
+function MatrixSettings.DispatchGameEvent(cmdTb)
+	if not cmdTb or type(cmdTb) ~= "table" then
+		return false;
+	end
+
+	EventDispatcher.DispatchEvent(Common.GAME_COMMAND, JsonManager.EncodeJson(cmdTb));
+end
+
+
+---- 处理客户端协议(按需设置)
+function MatrixSettings.HandleMatrixInfoList(cmdTb)
+	if not cmdTb["module"] or not cmdTb["tab"] then
+		return nil
+	end
+
+	local typeValua = tostring(cmdTb["type"])
+	local moduleValua = tostring(cmdTb["module"])
+	local tabValua = tostring(cmdTb["tab"])
+	local parentPathValua = tostring(cmdTb["parentPath"])
+
+	if string.lower(typeValua) == "open" then
+		if not MatrixSettings.MatrixInfoList[moduleValua] then
+			return nil
+		end
+
+		if not MatrixSettings.MatrixInfoList[moduleValua][tabValua] then
+			return nil
+		end
+
+		MatrixSettings.CurMatrixInfo = MatrixSettings.MatrixInfoList[moduleValua][tabValua]
+		return "open"
+	end
+
+	if string.lower(typeValua) == "hide" then
+		if not MatrixSettings.MatrixInfoList[moduleValua] then
+			return nil
+		end
+	
+		if not MatrixSettings.MatrixInfoList[moduleValua][tabValua] then
+			return nil
+		end
+
+		MatrixSettings.CurMatrixInfo = MatrixSettings.MatrixInfoList[moduleValua][tabValua]
+		return "hide"
+	end
+
+	if string.lower(typeValua) == "close" then
+		if tostring(cmdTb["content"] == "all") then
+			return "destroy"
+		end
+
+		if not MatrixSettings.MatrixInfoList[moduleValua] then
+			return nil
+		end
+	
+		if not MatrixSettings.MatrixInfoList[moduleValua][tabValua] then
+			return "destroy"
+		end
+
+		MatrixSettings.CurMatrixInfo = MatrixSettings.MatrixInfoList[moduleValua][tabValua]
+		return "close"
+	end
+end
+
+function MatrixSettings.HandleMatrixInfoList(newProtocol, protocol)
+    local sortId = tonumber(protocol.sortId) or 0;
+    if sortId + 900 > 999 then
+        return "999";
+    end
+    return tostring(sortId + 900);
+end
+
+-- 剑侠业务特有
+function MatrixSettings.TransSortId(protocol)
+    local sortId = tonumber(protocol.sortId) or 0;
+    if sortId + 900 > 999 then
+        return "999";
+    end
+    return tostring(sortId + 900);
+end
+
+-- 剑侠业务特有
+function MatrixSettings.TransTag(protocol)
+    local tagId = tostring(protocol.tag);
+    local tagTb = {
+        ["抢购"] = "1",
+        ["紧急"] = "2",
+        ["活动"] = "3",
+        ["公告"] = "4",
+    }
+    return tagTb[tagId];
+end
+
+return MatrixSettings
+

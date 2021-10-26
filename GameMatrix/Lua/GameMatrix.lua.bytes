@@ -1,0 +1,2 @@
+local GameMatrix = require "GameMatrixCtrl";
+GameMatrix:New():Init();

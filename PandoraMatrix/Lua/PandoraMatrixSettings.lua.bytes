@@ -1,0 +1,191 @@
+require "Common"
+require "JsonManager"
+
+local MatrixSettings = {};
+
+MatrixSettings.TargetAction = {};
+MatrixSettings.IsSendReadyMsg = false;
+MatrixSettings.IsSendRedpointMsg = false;
+MatrixSettings.MatrixName = "PandoraMatrix";
+
+MatrixSettings.OpenCmd = "open";
+MatrixSettings.JumpCmd = "jump";
+MatrixSettings.HideCmd = "hide";
+MatrixSettings.CloseCmd = "close";
+
+-- 设置业务使用的UI类型
+function MatrixSettings.GetUIType()
+    return "NGUI";
+    --return "UGUI";
+end
+
+-- 设置是否使用单个活动模块
+function MatrixSettings.GetIsSingleModule()
+    return true;
+    -- return false;
+end
+
+-- 设置使用的活动模块的值, 单个模块会使用第一个值
+function MatrixSettings.GetModuleSettings()
+    local tbParam = {
+        {
+            module = "pandoraTab",
+            title = "百晓阁"
+        },
+        {
+            module = "pandoraTab2",
+            title = "精彩活动"
+        },
+        {
+            module = "pandoraTab3",
+            title = "限时活动"
+        },
+    };
+    return tbParam;
+end
+
+-- 设置使用的活动页签标签的值
+-- 需要和prefab上的图标和数量保持一致
+function MatrixSettings.GetActTabTagSettings()
+    local tbParam = { };
+    tbParam[1] = "全新"
+    tbParam[2] = "推荐"
+    tbParam[3] = "公告"
+    tbParam[4] = "回流"
+    tbParam[5] = "火爆"
+    tbParam[6] = "福利"
+    return tbParam;
+end
+
+-- 设置注册/注销潘多拉落地页的入口协议
+function MatrixSettings.HandleShowEntrance(number)
+    local cmdTb = {};
+    cmdTb.type = "pandoraLinkseeShowEntrance";
+    cmdTb.content = "0";
+    cmdTb.activityName = MatrixSettings.MatrixName;
+    cmdTb.iconUrl = "http://down.pandora.qq.com/images/jxqy/20210712122247/C91D5A6C7DCF16E946F97A960D77714C_1626063767.png";
+    cmdTb.countdown = "-1";
+    cmdTb.module = "";
+    cmdTb.countdownIconHide = "0";
+    cmdTb.tabName = "";
+    cmdTb.showEffect = "";
+    if not MatrixSettings.IsSendReadyMsg then
+        if tonumber(number) > 0 then
+            cmdTb.content = "1";
+            MatrixSettings.IsSendReadyMsg = true;
+        else
+            return;
+        end
+    else
+        if tonumber(number) < 1 then
+            cmdTb.content = "0";
+            MatrixSettings.IsSendReadyMsg = false;
+        else
+            return;
+        end
+    end
+    Common.CallGame(JsonManager.EncodeJson(cmdTb));
+end
+
+-- 设置显示/隐藏潘多拉落地页的入口红点协议
+function MatrixSettings.HandleShowRedpoint(number)
+    local cmdTb = {};
+    cmdTb.type = "pandoraLinkseeShowRedpoint";
+    cmdTb.content = "0";
+    cmdTb.activityName = MatrixSettings.MatrixName;
+    if not MatrixSettings.IsSendRedpointMsg then
+        if tonumber(number) > 0 then
+            cmdTb.content = "1";
+            MatrixSettings.IsSendRedpointMsg = true;
+        else
+            return;
+        end
+    else
+        if tonumber(number) < 1 then
+            cmdTb.content = "0";
+            MatrixSettings.IsSendRedpointMsg = false;
+        else
+            return;
+        end
+	end
+    Common.CallGame(JsonManager.EncodeJson(cmdTb));
+end
+
+
+---- 展示loading界面
+function MatrixSettings.ShowLoadingPanel()
+    local cmdTb = {}
+    cmdTb.type = "pandoraShowLoading"
+    cmdTb.content = "1"
+    cmdTb.info = "Loading..."
+
+    Common.CallGame(JsonManager.EncodeJson(cmdTb))
+end
+
+---- 隐藏loading界面
+function MatrixSettings.HideLoadingPanel()
+    local cmdTb = {}
+    cmdTb.type = "pandoraShowLoading"
+    cmdTb.content = "0"
+    cmdTb.info = "Loading..."
+
+    Common.CallGame(JsonManager.EncodeJson(cmdTb))
+end
+
+---- 模拟客户端分发消息(按需设置)
+function MatrixSettings.DispatchGameEvent(cmdTb)
+	if not cmdTb or type(cmdTb) ~= "table" then
+		return false
+	end
+
+	EventDispatcher.DispatchEvent(Common.GAME_COMMAND, JsonManager.EncodeJson(cmdTb))
+end
+
+-- 设置潘多拉落地页对客户端消息处理
+function MatrixSettings.ParserGameCmd(tbParam, actInfo)
+    local cmdType = string.lower(tostring(tbParam["type"]));
+    local cmdContent = tostring(tbParam["content"]);
+    local cmdModule = tostring(tbParam["module"]);
+    local cmdTab = tostring(tbParam["tab"]);
+    if cmdContent == MatrixSettings.MatrixName then
+        if cmdType == "open" then
+            return MatrixSettings.OpenCmd;
+        end
+        if cmdType == "hide" then
+            return MatrixSettings.HideCmd;
+        end
+        if cmdType == "close" then
+            return MatrixSettings.CloseCmd;
+        end
+        if cmdType == "panelDestroy" then
+            return MatrixSettings.CloseCmd;
+        end
+    end
+    if actInfo[cmdModule] and actInfo[cmdModule][cmdTab] then
+        --[[ if cmdType == "open" then
+            local curActInfo = actInfo[cmdModule][cmdTab];
+            local entrance = curActInfo["entrance"];
+            local redpoint = curActInfo["redpoint"];
+            if entrance and tostring(entrance["content"]) == "1" then
+                if not redpoint then
+                    entrance["redpoint"] = 0;
+                else
+                    entrance["redpoint"] = redpoint["content"];
+                end
+                MatrixSettings.TargetAction = entrance;
+                return MatrixSettings.JumpCmd;
+            end
+        end ]]
+    end
+    return nil;
+end
+
+---- 设置父节点，放在正确位置
+function MatrixSettings.SetParentObjNode(childObj, parentPath)
+    local parentObj = UnityEngine.GameObject.Find(parentPath);
+    if parentObj then
+        Common.SetPanelParent(gameObject, parentObj);
+    end
+end
+
+return MatrixSettings;

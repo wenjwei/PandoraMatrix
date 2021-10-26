@@ -1,0 +1,90 @@
+require "Logger";
+require "EventDispatcher";
+
+GameMatrixManager = {};
+GameMatrixManager.data = {};
+GameMatrixManager.IsCacheData = true;
+
+function GameMatrixManager.pandoraShowMatrix(tbParam)
+	if not GameMatrixManager.CheckCommonAttribute(tbParam) then
+		GameMatrixManager.LogWarnInfoMsg("参数校验错误");
+		return false;
+	end
+	if not tbParam.content or not tonumber(tbParam.content) then
+		GameMatrixManager.LogWarnInfoMsg("content字段参数错误");
+		return false;
+	end
+	if not tbParam.tag or tostring(tbParam.tag) == "" then
+		tbParam.tag = "测试";
+	end
+	if not tbParam.sortId or not tonumber(tbParam.sortId) then
+		tbParam.sortId = "0";
+	end
+	if not tbParam.showName or tostring(tbParam.showName) == "" then
+		tbParam.showName = "活动测试_" .. tostring(tbParam.tab);
+	end
+	if not tbParam.targetUrl or tostring(tbParam.targetUrl) == "" then
+		tbParam.targetUrl = "0";
+	end
+	if not tbParam.countdown or not tonumber(tbParam.countdown) then
+		tbParam.countdown = "-1";
+	end
+	tbParam.type = "pandoraShowMatrix";
+	GameMatrixManager.DispatchGameMatrixEvent(tbParam);
+end
+
+function GameMatrixManager.pandoraRedpointMatrix(tbParam)
+	if not GameMatrixManager.CheckCommonAttribute(tbParam) then
+		GameMatrixManager.LogWarnInfoMsg("参数校验错误");
+		return false;
+	end
+	if not tbParam.content or not tonumber(tbParam.content) then
+		GameMatrixManager.LogWarnInfoMsg("content字段参数错误");
+		return false;
+	end
+	tbParam.type = "pandoraRedpointMatrix";
+	GameMatrixManager.DispatchGameMatrixEvent(tbParam);
+end
+
+function GameMatrixManager.pandoraCloseMatrix(tbParam)
+	if not GameMatrixManager.CheckCommonAttribute(tbParam) then
+		GameMatrixManager.LogWarnInfoMsg("参数校验错误");
+		return false;
+	end
+	tbParam.type = "pandoraCloseMatrix";
+	GameMatrixManager.DispatchGameMatrixEvent(tbParam);
+end
+
+
+function GameMatrixManager.LogWarnInfoMsg(msgContent)
+	Logger.WARN("[GameMatrixManager]: " .. tostring(msgContent));
+end
+
+function GameMatrixManager.CheckCommonAttribute(tbParam)
+	if not Common.GetFunctionSwitch("GameMatrix") then
+		GameMatrixManager.LogWarnInfoMsg("游戏落地页尚未安排接入");
+		return false;
+	end
+	if not tbParam or type(tbParam) ~= "table" then
+		GameMatrixManager.LogWarnInfoMsg("tbParam参数类型错误");
+		return false;
+	end
+	if not tbParam.module or tostring(tbParam.module) == "" then
+		GameMatrixManager.LogWarnInfoMsg("module字段参数错误");
+		return false;
+	end
+	if not tbParam.tab or tostring(tbParam.tab) == "" then
+		GameMatrixManager.LogWarnInfoMsg("tab字段参数错误");
+		return false;
+	end
+	return true;
+end
+
+function GameMatrixManager.DispatchGameMatrixEvent(tbParam)
+	if GameMatrixManager.IsCacheData then
+		table.insert(GameMatrixManager.data, tbParam);
+		return;
+	end
+	EventDispatcher.DispatchEvent("GameMatrixEvent", tbParam);
+end
+

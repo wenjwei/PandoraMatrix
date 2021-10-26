@@ -1,0 +1,104 @@
+require "tprint"
+local InnerLogger = com.tencent.pandora.Logger;
+local CSharpInterface = com.tencent.pandora.CSharpInterface;
+local fullLogOutput = CSharpInterface.GetFunctionSwitch("fullLogOutput")
+local fullLogOutput = true
+local hasGotResourceGroups = false
+local internalPlatformResourceGroups = {}
+Logger = {}
+
+local msg = ""
+
+local SafeCall = function(func, ...)
+    if type(func) ~= "function" then
+        Logger.ERROR("SafeCall 接收到的参数func不是函数，请检查")
+        return nil,false
+    end
+
+    local args = {...}
+
+    local status, result = xpcall(function ()
+            return func(unpack(args));
+        end,function (err)
+            local msg = "SafeCall error: " .. tostring(err) .. "|" .. debug.traceback()
+            print(msg)
+            CSharpInterface.ReportLuaError(msg);
+        end);
+
+        if not status then
+            return nil,false
+        else
+            return result,true
+        end
+end
+
+local IsInternalPlatformResourceGroup = function(groupName)
+    if hasGotResourceGroups == false  then
+        hasGotResourceGroups = true
+        local array,isSuccessful = SafeCall(CSharpInterface.GetInternalPlatformResourceGroups)
+
+        if isSuccessful == true and array ~= nil and array.Length >=1 then
+            for i=1, array.Length do
+                internalPlatformResourceGroups[array[i]] = 1
+            end
+        end
+    end
+
+    if internalPlatformResourceGroups[groupName] == 1 then
+        return true
+    end
+
+    return false
+end
+
+local TransformTag = function(orginTag)
+    local transformedTag = orginTag
+    if orginTag == nil or IsInternalPlatformResourceGroup(orginTag) == true then
+        transformedTag = "Internal"
+    end
+    return transformedTag
+end
+
+
+--新版本Logger有2个参数，旧版本只有1个参数，为了兼容，先尝试调用1个参数的，如果报错（可以捕获），则调用2个参数的。
+function Logger.DEBUG(message, tag)
+    tag = TransformTag(tag)
+    msg = tostring(message)
+    if fullLogOutput == true then
+        msg = msg .."\n" .. debug.traceback()
+    end
+
+    SafeCall(InnerLogger.Log, msg,tag)
+end
+
+function Logger.INFO(message, tag)
+    tag = TransformTag(tag)
+    msg = tostring(message)
+    if fullLogOutput == true then
+        msg = msg .."\n" .. debug.traceback()
+    end
+
+    SafeCall(InnerLogger.LogInfo, msg,tag)
+end
+
+function Logger.WARN(message, tag)
+    tag = TransformTag(tag)
+    msg = string.format("<color=#FFFF00>%s</color>\n%s",tostring(message),debug.traceback())
+    SafeCall(InnerLogger.LogInfo, msg,tag)
+end
+
+function Logger.ERROR(message, tag)
+    tag = TransformTag(tag)
+    msg = string.format("<color=#FF0000>%s</color>\n%s",tostring(message),debug.traceback())
+    SafeCall(InnerLogger.LogInfo, msg,tag)
+end
+
+function Logger.TablePrinter(t, name, tag)
+    local str = table.show(t, name)
+    str = string.sub(str, 1, 65535)
+    Logger.DEBUG(str, tag)
+end
+
+
+
+return Logger;

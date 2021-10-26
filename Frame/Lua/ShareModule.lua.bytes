@@ -1,0 +1,280 @@
+-- 分享模块
+require "Logger";
+
+ShareModule = {};
+
+--结构化消息分享到微信
+--@param title             标题
+--@param desc              描述
+--@param imgUrl            分享缩略图的url
+--@param userOpenId        要分享的好友openId，如果不填需要玩家手动选择好友，如果填了，系统会自动选择好友（定向分享）。
+--@param mediaTagName      此值会传到微信供统计用，可传空串。
+--@param messageExt        游戏自定义透传字段，当前传空串。
+--@param extraJson         扩展字段，游戏透传给MSDK 常见参数为{\"game_data\":\"\",\"isFriendInGame\":false}。
+function ShareModule.ShareStructMessageToWX(title,desc,imgUrl,userOpenId,mediaTagName,messageExt,extraJson)
+    local protocolTable = {}
+    protocolTable.type = "pandoraShareStructMessageToWX";
+    protocolTable.title = title;
+    protocolTable.desc = desc;
+    protocolTable.imgUrl = imgUrl;
+    protocolTable.userOpenId = userOpenId or "";
+    protocolTable.mediaTagName = mediaTagName or "";
+    protocolTable.messageExt = messageExt or "";
+    protocolTable.extraJson = extraJson or "";
+
+    Common.CallGameByTable(protocolTable);
+end
+
+--结构化消息分享到QQ
+--@param title             标题
+--@param desc              描述
+--@param imgUrl            分享缩略图的url
+--@param targetUrl         跳转url，若填手Q游戏中心详情页链接, 点击消息可拉起游戏；填其他链接则跳转对应链接。
+--@param isToSession       是否分享到会话，true：分享到会话，false：分享到空间。
+function ShareModule.ShareStructMessageToQQ(title,desc,imgUrl,targetUrl,isToSession)
+    local protocolTable = {}
+    protocolTable.type = "pandoraShareStructMessageToQQ";
+    protocolTable.title = title;
+    protocolTable.desc = desc;
+    protocolTable.imgUrl = imgUrl;
+    protocolTable.targetUrl = targetUrl;
+    protocolTable.scene = "1";
+    if isToSession == true then
+        protocolTable.scene = "2";
+    end
+   
+    Common.CallGameByTable(protocolTable);
+end
+
+--大图分享到微信
+--@param photoGameObject      待截图的节点gameObject
+--@param isToSession          是否分享到会话，true：分享到会话，false：分享到朋友圈。
+--@param mediaTagName         此值会传到微信供统计用，可传空串。
+--@param messageExt           游戏自定义透传字段，可传空串。
+--@param messageAction        分享到朋友圈时，游戏可以自定义朋友圈小尾巴行为，可传空串。
+function ShareModule.SharePhotoToWX(photoGameObject,isToSession,mediaTagName,messageExt,messageAction)
+    local protocolTable = {}
+    protocolTable.type = "pandoraSharePhotoToWX";
+    protocolTable.gameObjectPath = ShareModule.GetGameObjectPath(photoGameObject);
+    protocolTable.scene = "1";
+    if isToSession == true then
+        protocolTable.scene = "0";
+    end
+    protocolTable.mediaTagName = mediaTagName or "";
+    protocolTable.messageExt = messageExt or "";
+    protocolTable.messageAction = messageAction or "";
+   
+    Common.CallGameByTable(protocolTable);
+end
+
+--预置大图分享到微信
+--@param isToSession          是否分享到会话，true：分享到会话，false：分享到朋友圈。
+--@param mediaTagName         此值会传到微信供统计用，可传空串。
+--@param messageExt           游戏自定义透传字段，可传空串。
+--@param messageAction        分享到朋友圈时，游戏可以自定义朋友圈小尾巴行为，可传空串。
+--@param imgUrl               预置图片的url。
+--@param shareType            经分统计用，传给游戏，游戏来上报，这个值来源于埋点数据。
+--@param actionId             经分统计用，传给游戏，游戏来上报，这个值来源于管理端的活动id。
+function ShareModule.SharePresetPhotoToWX(isToSession,mediaTagName,messageExt,messageAction,imgUrl,shareType,actionId)
+    local protocolTable = {}
+    protocolTable.type = "pandoraSharePresetPhotoToWX";
+    protocolTable.scene = "1";
+    if isToSession == true then
+        protocolTable.scene = "0";
+    end
+    protocolTable.mediaTagName = mediaTagName or "";
+    protocolTable.messageExt = messageExt or "";
+    protocolTable.messageAction = messageAction or "";
+    protocolTable.imgUrl = imgUrl or "";
+    protocolTable.shareType = shareType or "";
+    protocolTable.actionId = actionId or "";
+
+    Common.CallGameByTable(protocolTable);
+end
+
+--大图分享到QQ
+--@param photoGameObject      待截图的节点gameObject
+--@param isToSession          是否分享到会话，true：分享到会话，false：分享到空间。
+function ShareModule.SharePhotoToQQ(photoGameObject,isToSession)
+    local protocolTable = {}
+    protocolTable.type = "pandoraSharePhotoToQQ";
+    protocolTable.gameObjectPath = ShareModule.GetGameObjectPath(photoGameObject);
+    protocolTable.scene = "1";
+    if isToSession == true then
+        protocolTable.scene = "2";
+    end
+    
+    Common.CallGameByTable(protocolTable);
+end
+
+--预置大图分享到QQ
+--@param isToSession          是否分享到会话，true：分享到会话，false：分享到空间。
+--@param imgUrl               预置图片的url。
+--@param shareType            经分统计用，传给游戏，游戏来上报，这个值来源于埋点数据。
+--@param actionId             经分统计用，传给游戏，游戏来上报，这个值来源于管理端的活动id。
+function ShareModule.SharePresetPhotoToQQ(isToSession,imgUrl,shareType,actionId)
+    local protocolTable = {}
+    protocolTable.type = "pandoraSharePresetPhotoToQQ";
+    protocolTable.scene = "1";
+    if isToSession == true then
+        protocolTable.scene = "2";
+    end
+    protocolTable.imgUrl = imgUrl or "";
+    protocolTable.shareType = shareType or "";
+    protocolTable.actionId = actionId or "";
+
+    Common.CallGameByTable(protocolTable);
+end
+
+--结构化消息分享到QQ同玩好友（即QQ后端分享）
+--@param title             标题
+--@param desc              描述
+--@param previewText       预览文本，此文本显示在结构化消息的底端，用于说明点击消息后的行为。如打开游戏，阅读全文。
+--@param imgUrl            分享缩略图的url
+--@param targetUrl         跳转地址
+--@param userOpenId        要分享的好友openId
+--@param gameTag           用于平台对分享类型的统计，由游戏定制。
+--@param msdkExtInfo       扩展字段，一般传空串。
+--补充说明：微信端使用ShareStructMessageToWX接口与此功能对应，调用时必须填充userOpenId参数。
+function ShareModule.ShareStructMessageToQQGameFriend(title,desc,previewText,imgUrl,targetUrl,userOpenId,gameTag,msdkExtInfo)
+    local protocolTable = {}
+    protocolTable.type = "pandoraShareStructMessageToQQGameFriend";
+    protocolTable.act = "1";
+    protocolTable.title = title;
+    protocolTable.desc = desc;
+    protocolTable.previewText = previewText;
+    protocolTable.imgUrl = imgUrl;
+    protocolTable.targetUrl = targetUrl;
+    protocolTable.userOpenId = userOpenId;
+    protocolTable.gameTag = gameTag or "";
+    protocolTable.msdkExtInfo = msdkExtInfo or "";
+   
+    Common.CallGameByTable(protocolTable);
+end
+
+--链接分享到微信
+--@param title             标题
+--@param desc              描述
+--@param imgUrl            分享缩略图的url
+--@param targetUrl         跳转地址
+--@param userOpenId        要分享的好友openId，如果不填需要玩家手动选择好友，如果填了，系统会自动选择好友（相当于定向分享）。
+--@param isToSession       是否分享到会话，true：分享到会话，false：分享到朋友圈。
+--@param mediaTagName      此值会传到微信供统计用，可传空串。
+--@param messageExt        游戏自定义透传字段，可传空串。
+--@param extraJson         扩展字段，游戏透传给MSDK 常见参数为{\"game_data\":\"\",\"isFriendInGame\":false}。
+function ShareModule.ShareUrlToWX(title,desc,imgUrl,targetUrl,userOpenId,isToSession,mediaTagName,messageExt,extraJson)
+    local protocolTable = {}
+    protocolTable.type = "pandoraShareUrlToWX";
+    protocolTable.title = title;
+    protocolTable.desc = desc;
+    protocolTable.imgUrl = imgUrl;
+    protocolTable.targetUrl = targetUrl;
+    protocolTable.scene = "1";
+    if isToSession == true then
+        protocolTable.scene = "0";
+    end
+    protocolTable.userOpenId = userOpenId or "";
+    protocolTable.mediaTagName = mediaTagName or "";
+    protocolTable.messageExt = messageExt or "";
+    protocolTable.extraJson = extraJson or "";
+
+    Common.CallGameByTable(protocolTable);
+end
+
+--小程序分享到微信
+--@param title             标题
+--@param desc              描述
+--@param imgUrl            分享缩略图的url
+--@param webpageUrl        普通页面url，用于兼容旧版本微信，当打不开该小程序时就会打开此url。
+--@param userName          小程序username，如gh_d43f693ca31f，名称均为gh_这种形式，如果填错，会出现“由于不支持的分享类型，无法分享到微信”。
+--@param path              可通过该字段指定跳转小程序的某个页面（若不传，默认跳转首页）
+--@param withShareTicket   是否带shareTicket转发，如果小程序页面要展示用户维度的数据，并且小程序可能分享到群，需要设置为true。
+--@param programType       指定小程序版本，可选值为："Release" "Test", "Preview"。
+--@param userOpenId        要分享的好友openId，如果不填需要玩家手动选择好友，如果填了，系统会自动选择好友（相当于定向分享）。
+--@param isToSession       是否分享到会话，true：分享到会话，false：分享到朋友圈。
+--@param mediaTagName      此值会传到微信供统计用，可传空串。
+--@param messageExt        游戏自定义透传字段，可传空串。
+--@param messageAction     自定义小尾巴行为,可传空串。 
+function ShareModule.ShareMiniAppToWX(title,desc,imgUrl,webpageUrl,userName,path,withShareTicket,programType,userOpenId,isToSession,mediaTagName,messageExt,messageAction)
+    local protocolTable = {}
+    protocolTable.type = "pandoraShareMiniAppToWX";
+    protocolTable.title = title;
+    protocolTable.desc = desc;
+    protocolTable.imgUrl = imgUrl;
+    protocolTable.webpageUrl = webpageUrl;
+    protocolTable.userName = userName;
+    protocolTable.path = path;
+    protocolTable.withShareTicket = "false";
+    if withShareTicket == true then
+        protocolTable.withShareTicket = "true";
+    end
+
+    protocolTable.programType = "0";
+    if programType == "Test" then
+        protocolTable.programType = "1";
+    end
+    
+    if programType == "Preview" then
+        protocolTable.programType = "2";
+    end
+    
+    protocolTable.scene = "1";
+    if isToSession == true then
+        protocolTable.scene = "0";
+    end
+
+    protocolTable.userOpenId = userOpenId or "";
+    protocolTable.mediaTagName = mediaTagName or "";
+    protocolTable.messageExt = messageExt or "";
+    protocolTable.messageAction = messageAction or "";
+   
+    Common.CallGameByTable(protocolTable);
+end
+
+--小程序分享到QQ
+--@param title             标题
+--@param desc              描述
+--@param imgUrl            分享缩略图的url
+--@param url               普通页面url，用于兼容旧版本QQ，当打不开该小程序时就会打开此url。
+--@param miniProgramAppid  游戏绑定的小程序appid
+--@param miniProgramPath   小程序页面的路径
+--@param programType       指定小程序版本，可选值为："Release" "Test", "Preview"
+--@param isToSession       是否分享到会话，true：分享到会话，false：分享到空间。
+function ShareModule.ShareMiniAppToQQ(title,desc,imgUrl,url,miniProgramAppid,miniProgramPath,programType,isToSession)
+    local protocolTable = {}
+    protocolTable.type = "pandoraShareMiniAppToQQ";
+    protocolTable.title = title;
+    protocolTable.desc = desc;
+    protocolTable.imgUrl = imgUrl;
+    protocolTable.url = url;
+    protocolTable.miniProgramAppid = miniProgramAppid;
+    protocolTable.miniProgramPath = miniProgramPath;
+    protocolTable.withShareTicket = "false";
+
+    protocolTable.programType = "0";
+    if programType == "Test" or programType == "Preview" then
+        protocolTable.programType = "1";
+    end
+    
+    protocolTable.scene = "1";
+    if isToSession == true then
+        protocolTable.scene = "2";
+    end
+   
+    Common.CallGameByTable(protocolTable);
+end
+
+-- 获取gameObject在Hierarchy下的路径
+function ShareModule.GetGameObjectPath(gameObject)
+    if gameObject == nil then
+        Logger.ERROR("调用ShareModule.GetGameObjectPath 接口的参数gameObject 为nil");
+        return "";
+    end
+    local path = "";
+    local transform = gameObject.transform;
+    while transform ~= nil do
+        path = "/" .. transform.name .. path;
+        transform = transform.parent;
+    end
+    return string.sub(path, 2);
+end

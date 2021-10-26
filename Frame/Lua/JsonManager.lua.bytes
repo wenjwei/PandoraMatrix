@@ -1,0 +1,23 @@
+local json =  require "cjson"
+
+JsonManager = {};
+
+-- json -> table
+function JsonManager.DecodeJson(jsonStr)
+
+	local ok,ret=pcall(function()
+		local jsonTable =  json.decode(jsonStr);
+		return jsonTable
+	end)
+	if not ok then 
+		return nil 
+	else 
+		return ret 
+	end
+end
+
+--  table -> json str
+function JsonManager.EncodeJson(jsonTable)
+	local jsonData = json.encode(jsonTable);
+	return jsonData
+end

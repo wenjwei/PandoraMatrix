@@ -1,0 +1,29 @@
+
+local mt = {};
+
+function mt:New()
+	local o = {};
+	setmetatable(o, self);
+	self.__index = self;
+	return o;
+end
+
+function mt:Init(gameObject)
+	self.gameObject = gameObject;
+	self.transform = self.gameObject.transform;
+	self.InnerNode = self.transform:Find("Parent_Inner").gameObject;
+	self.OuterNode = self.transform:Find("Parent_Outer").gameObject;
+	self.ImageMain = self.transform:Find("Image_Holder").gameObject;
+	self.ButtonJump = self.transform:Find("Image_Holder").gameObject;
+end
+
+function mt:Dispose()
+	self.gameObject = nil;
+	self.transform = nil;
+	self.InnerNode = nil;
+	self.OuterNode = nil;
+	self.ImageMain = nil;
+	self.ButtonJump = nil;
+end
+
+return mt

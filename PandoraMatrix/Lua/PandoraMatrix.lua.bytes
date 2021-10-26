@@ -1,0 +1,2 @@
+local PandoraMatrix = require "PandoraMatrixCtrl";
+PandoraMatrix:New():Init();

@@ -1,0 +1,1246 @@
+--[[
+    ver 1.3.2
+
+    说明
+    PixUI的活动入口固定为index.html, 数据虚拟机入口固定为preprocess.html.
+    支持游戏调用 {"type":"close", "appId":"12"} 关闭指定活动面板
+    支持游戏调用 {"type":"close", "appId":"*"} 关闭所有活动面板
+    logout 时会先销毁所有pixui虚拟机，以免报错
+    注意:因为小应用平台上注册活动appName是大小写不敏感的，所以Pxframe中，注入JS活动的appName都转为了小写。
+
+    1.2版本SDK兼容处理
+	1. Common.CheckAppKey 固定返回 true
+	2. 去除Common.GetSandBoxPath接口
+
+    版本历史
+    1.3.3
+    + 遵照新协议修改了入口协议字段 pandoraShowEntrance -> pandoraGameletShowEntrance , 这个字段也可以通过管理端入口配置改变
+
+    1.3.2
+    + 注入appId类型修改为number
+    + 注入appVersion
+    + 向游戏暴露 gameServiceFrameVer
+    + 修复了王者根节点查找顺序的问题
+    + 修复处理了游戏发给pixui的hide机制
+    + 重新规划了消息机制，增加了 game->js 消息的转发，key使用 "BROADCAST_MSG_FROM_GAME";
+    + 增加了启动时间戳
+
+    1.3.1
+    + 增加了游戏发送过来协议的兼容性 appId - appid， parentPath - parent ， mainpage - entrance
+    + 优化了活动间通信的支持
+    + 增加了alreadyClose协议，活动如果存在被游戏强杀的可能性，需要在onclose时调用，避免pixui无法感知活动已关闭而无法打开。
+    + 优化了 mainpage 字段打开同一个 App 的不同窗口，以及使用 windowId / appId 定向发送消息。注意mainpage字段大小写敏感
+    + 修改SDK代发入口协议默认为 false
+    + 增加了窗口加载成功/失败给游戏的回调 LoadPixUIWindowResult
+    + 修复了PxFrame隐藏窗口的问题
+
+    1.3.0
+    + 增加 SetStashData , ClearStashData 中的Appkey校验
+    + 支持一个活动启动多个窗口
+    + 支持不通活动窗口间相互通信或打开新窗口（使用PXCommand）
+
+    1.2.7
+    + 增加了提供给其他活动管理模块（活动中心，拍脸控制器）调用的打开关闭活动接口  PxFrame.OpenWindow，PxFrame.CloseWindow，PxFrame.HideWindow
+      其他控制器可以自己接收活动注册信息，并决定什么时候打开活动。但这些控制器无需自己打开活动，只需调用PxFrame的接口就行了
+    + 去除 release_agency 设置
+    + 正式环境中去除读取管理端配置的URL地址能力（因为不利于做版本管理，游戏无法管控发布）
+
+    1.2.6 bugfix
+    + 环境，登录态，app信息通过注入为全局变量 gamelet.xxx
+    + datastash 支持 object 类型
+    + 通信协议支持 appName 字段
+
+    1.2.5
+    + 加入了mainpage指定入口协议的支持
+    + 加入windowId查询appId接口
+    + 增加了assetName和appId的互转接口。使用场景是wx名片这种在多个游戏中上线的活动，只要活动名保持一致，就能在不同活动中获取自己的appId
+
+    1.2.4
+    + 增加了对数据虚拟机的索引, 用于logout时集中销毁数据虚拟机, 避免pixui报错
+
+    1.2.3
+    + 寻找根节点时首先查找协议中parentPath，再查找游戏 setParent 设置的节点
+    + url中加入了env
+
+    1.2.2
+    + 创建活动时不再默认创建 pxFrame 面板
+
+    1.2.1
+    + 去除了打印频繁的日志
+    + entrance_config : 协议 type 名称也可以自选, 用户填入时以用户填入为准，不填时默认 pandoraShowEntrance
+    + 管理端不配置 entrance_config 时，这条协议不会发送
+]]
+require "JsonManager"
+require "EventDispatcher"
+require "StringTool"
+require "Logger"
+
+PxFrame = {}
+local mt = {}
+local CSharpInterface = com.tencent.pandora.CSharpInterface
+local gameServiceFrameVersion = "1.3.2"
+-- 配置
+local isNGUIUsed = false
+local nguiMaskPanelName = "NGUIMask"
+-- 配置End
+local isNguiMaskPanelCreate = false;
+local htmlEntrance = "index" --活动主入口
+local preProcessPanelName = "PxFramePreProcess"
+local preProcesshtmlEntrance = "preprocess" --数据虚拟机主入口
+local entranceConfigKey = "entrance_config"
+local openMessageKey = "open_message"
+local urlConfigKey = "url_config"
+local startupConfigKey = "startup_config"
+local preProcessVMRootObject  -- 前置虚拟机Root
+local createPanelTaskQueue = {}; -- 前置虚拟机创建面板的任务队列
+local tasklock; -- 前置虚拟机的队列锁
+-- sdk标记常量
+PxFrame.gameletsdk = "gameletsdk"
+PxFrame.JS_COMMAND = "PIXUI_COMMAND_FROM_JS";
+PxFrame.BROADCAST_MSG_FROM_GAME = "BROADCAST_MSG_FROM_GAME";
+
+-- PxFrame.AssetInfoMap 保存活动资源信息，这里的信息都是从CGI拉到的，且不会变化
+-- @key : appid
+-- @value
+-- assetName: 资源名，来源于对活动包名的解析， xxx_bin.zip
+-- appName：管理端注册的活动名，应该和assetName一致
+-- entrance_config: 入口配置，来源于管理端配置
+-- url_config: url配置，来源于管理端配置
+PxFrame.AssetInfoMap = {}
+
+-- 入口文件名称 ， URL ， 面板资源名， urlargs, parentPath  应该支持从customconfig进行配置
+-- PxFrame.ActionInfoMap 记录的是"当前已打开"的活动主窗口的信息
+-- @key : appid
+-- @value : mainpage dictionary , 以下是 mainpage 内部字段
+-- url ： 游戏协议中的 url 的参数， pxFrame检测到有URL则使用url（如果协议中有则记录）
+-- args : 游戏协议中的 args 的参数，打开页面时会被拼成 url?args（如果协议中有则记录）
+-- parentPath:游戏协议中的 parentPath 的参数（如果协议中有则记录）
+-- realParentPath:最终使用的父层级面板。父节点可能来源于游戏的open协议，游戏设置的setpanelparent,
+--                或者默认的Canvas。这里记录最终使用的父节点名
+-- windowId: 打开页面的 windowId. 结构是字典 [mainpage活动主页名] - [windowId]
+-- actManagerTag: 活动所属的管理器标签，pxframe活动默认为空
+PxFrame.ActionInfoMap = {}
+
+-- PxFrame.PreProcessInfoMap 记录的是"当前已打开" 的数据虚拟机的窗口信息
+-- assetName: 活动名（未取用，仅为了观察方便）
+-- url ： 如果打开的是网页地址，则输入url, pxFrame检测到有URL则使用url（此处的url来源于管理端）
+-- args : url的参数，打开页面时会被拼成 url?args（此处的url来源于管理端）
+-- windowId:打开页面的 windowId. 因为一个活动只可能有一个数据虚拟机，所以这个值是number类型
+PxFrame.PreProcessInfoMap = {}
+
+-- 提供给活动记录临时信息的字典
+-- @key: appid
+-- @value [key] - [value] 用户自定义信息
+PxFrame.DateStash = {}
+PxFrame.Instance = mt;
+
+------------------------------------------------
+-- 流程相关
+------------------------------------------------
+function mt:Init()
+    self:AddCommandEventListener()
+end
+
+function mt:AddCommandEventListener()
+    EventDispatcher.AddEventListener(
+        Common.GAME_COMMAND,
+        function(jsonStr)
+            self:OnGameCommand(jsonStr)
+        end
+    )
+    EventDispatcher.AddEventListener(
+        Common.PX_COMMAND,
+        function(windowId, jsonStr)
+            self:OnPxCommand(windowId, jsonStr)
+        end
+    )
+    EventDispatcher.AddEventListener(
+        Common.SDK_COMMAND,
+        function(jsonStr)
+            self:OnSDKCommand(jsonStr)
+        end
+    )
+    EventDispatcher.AddEventListener(
+        PxFrame.JS_COMMAND,
+        function(jsonStr)
+            self:OnJsCommand(jsonStr);
+        end
+    );
+end
+
+--[[
+    @desc: 这里是处理一些js传给pxFrame的特殊逻辑
+]]
+function mt:OnJsCommand(jsonStr)
+    Logger.DEBUG("[PxFrame] OnJsCommand 收到 JS 消息 | jsonStr: " .. jsonStr);
+    self:OnCommand(jsonStr, "act")
+end
+
+function mt:OnGameCommand(jsonStr)
+    self:OnCommand(jsonStr, "game")
+end
+
+-- OnCommand 能处理两种来源的消息
+-- "game" . OnGameCommand 从游戏发来的消息
+-- "act" . OnJsCommand 从JS脚本发来的消息
+function mt:OnCommand(jsonStr, source)
+    local params = JsonManager.DecodeJson(jsonStr)
+    if params == nil then
+        return
+    end
+
+    if source == "game" then
+        -- 关闭所有数据虚拟机
+        if params["type"] == "panelDestroy" and params["content"] == "PxFramePreProcess" then
+            Logger.DEBUG("[PxFrame] OnCommand 数据虚拟机被销毁 | jsonStr: " .. jsonStr);
+            for _appid, _ in pairs(PxFrame.PreProcessInfoMap) do
+                self:ClosePreProcessPanel(_appid)
+            end
+            preProcessVMRootObject = nil
+            return
+        end
+
+        -- 关闭所有活动虚拟机
+        if (params["type"] == "close" and params["appId"] == "*") or (params["type"] == "panelDestroy" and params["content"] == "PxFrame") then
+            Logger.DEBUG("[PxFrame] OnCommand 关闭所有pixui活动面板 | jsonStr: " .. jsonStr);
+            for _appid, _ in pairs(PxFrame.ActionInfoMap) do
+                self:ClosePanelByAppId(_appid)
+            end
+            return
+        end
+
+        -- 关闭属于某个活动管理器（比如活动中心）的活动虚拟机
+        if (params["type"] == "close" and type(params["actManagerTag"]) == "string") then
+            Logger.DEBUG(string.format("[PxFrame] OnCommand 关闭 tag:%s 类型的活动面板 | jsonStr: %s" , params["actManagerTag"], jsonStr));
+            for _appid, _value in pairs(PxFrame.ActionInfoMap) do
+                for _, _mainpage in pairs(_value) do
+                    if _mainpage.actManagerTag == params["actManagerTag"] then
+                        self:ClosePanelByAppId(_appid)
+                    end
+                end
+            end
+            return
+        end
+
+        -- 关闭所有数据虚拟机和活动虚拟机
+        if params["type"] == "logout" then
+            Logger.DEBUG("[PxFrame] OnCommand logout 关闭所有window | jsonStr: " .. jsonStr);
+            for _appid, _ in pairs(PxFrame.ActionInfoMap) do
+                self:ClosePanelByAppId(_appid)
+            end
+
+            for _appid, _ in pairs(PxFrame.PreProcessInfoMap) do
+                self:ClosePreProcessPanel(_appid)
+            end
+            return
+        end
+
+        -- 预览活动
+        if params["type"] == "URLPreviewReloadPxWindow" then
+            self:SendOpenMessage(params["url"]);
+            return;
+        end
+    end
+
+    -- pxframe目前只处理打开、关闭、隐藏消息
+    local isBelong
+    local id = params["appId"] or params["appid"]
+    -- 当协议中带有 appid 时，直接校验isPxFrame.
+    -- 当协议中没有 appid 时，校验传来的 module 和 tab 是否和管理端配置的一样.
+    -- 管理端分配的appId > 0 , appId = 0 是SDK保留情况
+    if id == "0" then
+        id = tonumber(id);
+        isBelong = true;
+    elseif id ~= nil then
+        id = tonumber(id);
+        isBelong = CSharpInterface.GetApplicationUsePxFrame(id);
+    elseif params["module"] ~= nil then
+        isBelong,id = self:IsMsgBelongToPxFrame(params["module"], params["tab"])
+    elseif params["appName"] ~= nil then
+        isBelong,id = self:IsMsgBelongToPxFrameByAppname(params["appName"])
+    end
+
+    if isBelong ~= true then
+        -- 消息不属于pxframe
+        -- 把游戏发过来的，pxframe不处理的消息进行广播。
+        -- 活动之间不应产生广播消息，只有点对点消息。通过JS中的EventDispatcher触发
+        if source == "game" then
+            EventDispatcher.DispatchEvent(PxFrame.BROADCAST_MSG_FROM_GAME, jsonStr);
+        end
+        return
+    end
+
+    if not PxFrame.AssetInfoMap[id] then
+        Logger.ERROR( "[PxFrame] 无法获取到appId:".. id .. " 的活动配置信息。可能是活动资源未加载完成，也可能是管理端的自定义配置有误" );
+        return;
+    end
+
+    Logger.DEBUG("[PxFrame] OnCommand  " .. jsonStr);
+    -- mainpage是不带后缀的，打开活动时用的entranceHtml才带
+    local mainpage = params["mainpage"] or params["entrance"] or htmlEntrance
+    if string.sub(mainpage, -5) == ".html" then
+        mainpage = string.sub(mainpage, 1, -6)
+    end
+
+    if params["type"] == "open" then
+        if PxFrame.ActionInfoMap[id] ~= nil and PxFrame.ActionInfoMap[id][mainpage] ~= nil then
+            Logger.WARN("[PxFrame] OnCommand 收到打开活动的消息，但本活动已打开 | appId:" .. id .. " mainpage:".. tostring(mainpage));
+            return
+        end
+
+        Logger.DEBUG("[PxFrame] OnCommand 打开活动 | appId:" .. id);
+        if not PxFrame.ActionInfoMap[id] then
+            PxFrame.ActionInfoMap[id] = {};
+        end
+
+        PxFrame.ActionInfoMap[id][mainpage] = {};
+        PxFrame.ActionInfoMap[id][mainpage]["url"] = params["url"]
+        PxFrame.ActionInfoMap[id][mainpage]["args"] = params["args"]
+        PxFrame.ActionInfoMap[id][mainpage]["parentPath"] = params["parentPath"] or params["parent"]
+        PxFrame.ActionInfoMap[id][mainpage]["actManagerTag"] = params["actManagerTag"]
+
+        -- 打开面板前，把游戏传来的open消息存起来。如果其中有一些特别的参数，让pixui可以拿到
+        PxFrame.SetDataStash(id, PxFrame.gameletsdk,  openMessageKey, jsonStr)
+        self:OpenPanel(id, params)
+        Common.OpenPlatformReportStats(0, 0, 104, id, 0, "", 0, "开放平台活动打开", 0, 0, 0, 0, 0, 0)
+        -- 活动打开上报
+        Common.ReportToTdm("收到App打开消息",  "appLaunch", 0 , id, PxFrame.gameletsdk);
+        return
+    end
+
+    if params["type"] == "hide" then
+        PxFrame.HideWindow(id, mainpage)
+        return
+    end
+
+    -- 关闭单个活动虚拟机
+    if params["type"] == "close" then
+        if mainpage then
+            Logger.DEBUG("[PxFrame] OnCommand 关闭活动 | appId:" .. id .. " mainpage:" .. mainpage);
+            if PxFrame.ActionInfoMap[id] and PxFrame.ActionInfoMap[id][mainpage] then
+                self:ClosePanelByWindowId(PxFrame.ActionInfoMap[id][mainpage].windowId)
+            end
+        else
+            Logger.DEBUG("[PxFrame] OnCommand 关闭活动 | appId:" .. id);
+            self:ClosePanelByAppId(id)
+        end
+        return
+    end
+
+    -- 通知PxFrame某个活动面板已经被关闭了
+    if params["type"] == "alreadyClose" then
+        if mainpage then
+            Logger.DEBUG("[PxFrame] OnCommand 活动已被关闭 | appId:" .. id .. " mainpage:" .. mainpage);
+            if PxFrame.ActionInfoMap[id] and PxFrame.ActionInfoMap[id][mainpage] then
+                PxFrame.ActionInfoMap[id][mainpage] = nil;
+            end
+        else
+            Logger.DEBUG("[PxFrame] OnCommand 活动已被关闭 | appId:" .. id);
+            PxFrame.ActionInfoMap[id] = nil;
+        end
+        return
+    end
+
+    -- 其他消息，只要 AppId 属于 pxFrame，转发给对应的 px 活动。 展示，隐藏 活动的消息也包含在这里处理，发给活动由活动自行响应
+    local appId = id
+    if  PxFrame.ActionInfoMap[appId] or PxFrame.PreProcessInfoMap[appId] then
+        if mainpage == "preprocess" then
+            if PxFrame.PreProcessInfoMap[appId] then
+                Common.CallPx(PxFrame.PreProcessInfoMap[appId].windowId, jsonStr);
+            else
+                Logger.WARN("[PxFrame] CallPx 找不到数据虚拟机 windowId, 可能是数据虚拟机已被销毁 | appId: " .. appId )
+            end
+        else
+            local isFindWindow = false
+            for _mainpage, _info in pairs(PxFrame.ActionInfoMap[appId]) do
+                if mainpage then
+                    if mainpage == _mainpage then
+                        isFindWindow = true
+                        Logger.DEBUG("[PxFrame] OnCommand pxframe转发消息给pixui活动 | windowId： " .. _info.windowId);
+                        Common.CallPx(_info.windowId, jsonStr);
+                    end
+                else
+                    isFindWindow = true
+                    Logger.DEBUG("[PxFrame] OnCommand pxframe转发消息给pixui活动 | windowId： " .. _info.windowId);
+                    Common.CallPx(_info.windowId, jsonStr);
+                end
+            end
+            if not isFindWindow then
+                Logger.WARN("[PxFrame] CallPx 找不到 windowId | appId: " .. appId .. " mainpage:" .. tostring(mainpage) )
+            end
+        end
+        return
+    else
+        Logger.WARN("[PxFrame] CallPx 找不到 windowId, 可能是面板已被销毁 | appId: " .. appId .. " mainpage:" .. tostring(mainpage))
+        return
+    end
+end
+
+function mt:OnPxCommand(windowId, jsonStr)
+    -- 监听 pixuiLoadComplete 事件。如果虚拟机加载失败了，给个提示并关闭对应页面 RemovePxWindow
+    local params = JsonManager.DecodeJson(jsonStr)
+    local appId, mainpage = PxFrame.GetAppIdandMainpageByWindowId(windowId);
+    local appName = PxFrame.GetAppNameByAppId(appId)
+    if  appId == -1 or appId == nil then
+        return;
+    end
+    if params["type"] == "pixuiLoadComplete" and params["status"] == false then
+        -- 处理窗口资源加载失败的情况
+        if self:ClosePreProcessPanel(nil, windowId) then
+            Logger.ERROR("[PxFrame] OnPxCommand 数据虚拟机资源加载失败 | windowId: " .. tostring(windowId) ..  ", jsonStr: " .. jsonStr)
+            -- 数据虚拟机资源加载失败
+            Common.ReportToTdm("数据虚拟机资源加载失败",  "preAppLaunchFail", 0, appId, PxFrame.gameletsdk);
+        elseif self:ClosePanelByWindowId(windowId) then
+            Logger.ERROR("[PxFrame] OnPxCommand 活动面板资源加载失败 | windowId: " .. tostring(windowId) ..  ", jsonStr: " .. jsonStr)
+            -- 活动主页面虚拟机资源加载失败
+            Common.ReportToTdm("虚拟机资源加载失败",  "appLaunchFail", 0, appId, PxFrame.gameletsdk);
+            local loadFailTable = {}
+            loadFailTable.type = "LoadPixUIWindowResult"
+            loadFailTable.isSuccess = "false"
+            loadFailTable.errCode = params["errCode"]
+            Common.CallGame(JsonManager.EncodeJson(loadFailTable))
+        end
+        return
+    elseif params["type"] == "pixuiLoadComplete" and params["status"] == true then
+        Common.ReportToTdm("虚拟机资源加载成功",  "appLaunchSuccess", 0, appId, PxFrame.gameletsdk);
+        local loadSuccessTable = {}
+        loadSuccessTable.type = "LoadPixUIWindowResult"
+        loadSuccessTable.isSuccess = "true"
+        loadSuccessTable.errCode = params["errCode"]
+        Common.CallGame(JsonManager.EncodeJson(loadSuccessTable))
+    end
+
+    -- 处理窗口关闭
+    if params["type"] == "close" or params["type"] == "pixuiWindowClose" then
+        -- 活动或是数据虚拟机关闭
+        if self:ClosePreProcessPanel(nil, windowId) then
+            Logger.DEBUG("[PxFrame] OnPxCommand 数据虚拟机关闭 | windowId: " .. tostring(windowId) ..  ", jsonStr: " .. jsonStr)
+        elseif self:ClosePanelByWindowId(windowId) then
+            Logger.DEBUG("[PxFrame] OnPxCommand 活动面板关闭 | windowId: " .. tostring(windowId) ..  ", jsonStr: " .. jsonStr)
+        end
+        return
+    end
+
+    -- 处理脚本初始化成功，注入变量
+    if params["type"] == "pixuiScriptInit" then
+        local isBelong = CSharpInterface.GetApplicationUsePxFrame(appId);
+        if isBelong or appId == 0 then
+            CSharpInterface.CreateScriptGlobal(windowId, "gamelet");
+            local openMsg = PxFrame.GetDataStash(appId, openMessageKey);
+            if openMsg then
+                -- 数据虚拟机没有openMsg
+                CSharpInterface.SetScriptGlobalString(windowId, "gamelet", openMessageKey , openMsg);
+                CSharpInterface.SetScriptGlobalString(windowId, "gamelet", "openMessage" , openMsg);
+            end
+
+            local entranceConfig = PxFrame.GetDataStash(appId, entranceConfigKey);
+            if entranceConfig then
+                -- 使用URL打开活动，或者使用appId/appName作为协议中的活动标识时没有entranceConfig
+                CSharpInterface.SetScriptGlobalString(windowId, "gamelet", entranceConfigKey , entranceConfig);
+                CSharpInterface.SetScriptGlobalString(windowId, "gamelet", "entranceConfig" , entranceConfig);
+            end
+            CSharpInterface.SetScriptGlobalNumber(windowId, "gamelet", "appId" , appId);
+            if appName then CSharpInterface.SetScriptGlobalString(windowId, "gamelet", "appName" , appName) end
+            if mainpage then CSharpInterface.SetScriptGlobalString(windowId, "gamelet", "mainpage" , mainpage) end
+            -- 这里和张清同步改动
+            if Common.IsProductEnvironment() then
+                CSharpInterface.SetScriptGlobalString(windowId, "gamelet", "env" , "relase");
+            else
+                CSharpInterface.SetScriptGlobalString(windowId, "gamelet", "env" ,"debug");
+            end
+            CSharpInterface.SetScriptGlobalBoolean(windowId, "gamelet", "isProductEnv" , Common.IsProductEnvironment());
+            CSharpInterface.SetScriptGlobalString(windowId, "gamelet", "sdkInfo" , "gamelet_unity");
+            CSharpInterface.SetScriptGlobalString(windowId, "gamelet", "sdkVersion" , Common.GetSDKVersion());
+            CSharpInterface.SetScriptGlobalString(windowId, "gamelet", "appVersion" , Common.GetAppVersion(appId));
+            -- CSharpInterface.SetScriptGlobalString(windowId, "gamelet", "sandboxPath" , Common.GetSandBoxPath(appId, PxFrame.gameletsdk));
+            if PxFrame.ActionInfoMap[appId] and PxFrame.ActionInfoMap[appId][mainpage] and PxFrame.ActionInfoMap[appId][mainpage]["realParentPath"] then
+                CSharpInterface.SetScriptGlobalString( windowId, "gamelet", "parentPath" , PxFrame.ActionInfoMap[appId][mainpage]["realParentPath"] );
+            end
+            local udTable = Common.GetUserDataTable();
+            udTable.sPayToken = nil;
+            udTable.sAccessToken = nil;
+            CSharpInterface.SetScriptGlobalString(windowId, "gamelet", "userdataJson" , JsonManager.EncodeJson(udTable));
+            CSharpInterface.SetScriptGlobalString(windowId, "gamelet", "userdata" , JsonManager.EncodeJson(udTable));
+            local windowStartTimestamp = Common.GetNowMilliseconds()
+            Logger.DEBUG("[PxFrame] OnPxCommand 页面启动时间戳 | appId: " .. tostring(appId) ..  ", startTimestamp: " .. windowStartTimestamp)
+            if type(windowStartTimestamp) == "number" then
+                CSharpInterface.SetScriptGlobalNumber(windowId, "gamelet", "windowStartTimestamp" , windowStartTimestamp);
+            end
+            -- 注入用户在本活动中Stash的数据, 取类型
+            local sdata = PxFrame.GetDataStash(appId, "startUpAppData")
+            if type(sdata) == "string" then
+                CSharpInterface.SetScriptGlobalString(windowId, "gamelet", "startUpAppData" , sdata);
+            elseif type(sdata) == "number" then
+                CSharpInterface.SetScriptGlobalNumber(windowId, "gamelet", "startUpAppData" , sdata);
+            elseif type(sdata) == "boolean" then
+                CSharpInterface.SetScriptGlobalBoolean(windowId, "gamelet", "startUpAppData" , sdata);
+            elseif type(sdata) == "table" then
+                -- 因为pixui接口限制，startUpAppData只能是number/boolean/string类型
+            end
+        end
+    end
+end
+
+function mt:OnSDKCommand(jsonStr)
+    if jsonStr == nil then
+        return
+    end
+
+    local tblCommand = JsonManager.DecodeJson(jsonStr)
+    if tblCommand == nil then
+        Logger.ERROR("[PxFrame] OnSDKCommand 收到的消息不是json格式 | jsonStr: %s", jsonStr)
+        return
+    end
+
+    -- AssetGroupCacheDone
+    if tblCommand.type == "AssetGroupCacheDone" then
+        Logger.DEBUG(string.format("[PxFrame] OnSDKCommand 资源加载完成 | jsonStr: %s", jsonStr))
+
+        local applicationId = tonumber(tblCommand.applicationId)
+        if applicationId == nil or applicationId == -1 then
+            return
+        end
+
+        local isBelong = CSharpInterface.GetApplicationUsePxFrame(applicationId)
+        if isBelong ~= true then
+            Logger.DEBUG("[PxFrame] 活动未使用 pxframe | appid:" .. applicationId);
+            return
+        end
+
+        -- todo 这里是否应该改为从SDK拉取name appId -> name,或者发消息时把appName带过来
+        local applicationAssetName = self:ParsePxResourceName(tblCommand.assetUrlList)
+        if applicationAssetName == nil then
+            return
+        end
+
+        -- 资源加载完成上报
+        Common.ReportToTdm("资源加载完成",  "AssetGroupDone", 0, applicationId, PxFrame.gameletsdk);
+
+        -- 读取启动配置 startupConfig
+        local startupConfig = CSharpInterface.GetApplicationCustomConfig(applicationId, startupConfigKey)
+        local startupDecodeConfig = StringTool.UrlDecode(startupConfig)
+        local startupTbl = JsonManager.DecodeJson(startupDecodeConfig)
+        if startupConfig ~= "" then
+            if startupTbl == nil then
+                -- 错误上报
+                Common.ReportToTdm("startupConfig 配置错误",  "startupConfigError" , 0, applicationId, PxFrame.gameletsdk);
+                Logger.ERROR(string.format("[PxFrame] application %d startup 参数配置不是json格式，当前配置为 %s", applicationId, startupDecodeConfig))
+                return
+            end
+        elseif startupConfig == "" then
+            startupTbl = {}
+        end
+
+        -- 读取入口配置 entranceConfig
+        local applicationConfig = CSharpInterface.GetApplicationCustomConfig(applicationId, entranceConfigKey)
+        local applicationDecodedConfig = StringTool.UrlDecode(applicationConfig)
+        local entranceTbl = JsonManager.DecodeJson(applicationDecodedConfig)
+        if applicationConfig ~= "" then
+            if entranceTbl == nil then
+                -- 错误上报
+                Common.ReportToTdm("entranceConfig 配置错误",  "entranceConfigError" , 0, applicationId, PxFrame.gameletsdk);
+                Logger.ERROR(string.format("[PxFrame] application %d 入口参数配置不是json格式，当前配置为%s", applicationId, applicationDecodedConfig))
+                return
+            end
+        elseif applicationConfig == "" then
+            entranceTbl = {}
+        end
+        -- 记录用户配置的 entranceConfig（仅包含用户在管理端配置的信息，不包含AddApplicationEntranceConfig追加信息）
+        PxFrame.SetDataStash(applicationId, PxFrame.gameletsdk, entranceConfigKey, applicationConfig);
+
+        PxFrame.AssetInfoMap[applicationId] = {}
+        PxFrame.AssetInfoMap[applicationId]["assetName"] = applicationAssetName
+	    PxFrame.AssetInfoMap[applicationId]["appName"] = applicationAssetName
+        PxFrame.AssetInfoMap[applicationId][entranceConfigKey] = entranceTbl
+        -- 有 entranceConfig 配置 且 startupTbl.send_entrance_proto 未关闭时, pxFrame 发送入口协议
+        if startupTbl.send_entrance_proto == "true" then
+            self:AddApplicationEntranceConfig(applicationId, entranceTbl)
+        end
+
+        -- 读取url配置 urlConfig
+        local urlConfig = CSharpInterface.GetApplicationCustomConfig(applicationId, urlConfigKey)
+        local urlDecodedConfig = StringTool.UrlDecode(urlConfig)
+        local urlConfigTable = JsonManager.DecodeJson(urlDecodedConfig)
+        if urlConfig ~= "" then
+            if urlConfigTable == nil then
+                -- 错误上报
+                Common.ReportToTdm("urlConfig 配置错误",  "urlConfigError" ,0 , applicationId, PxFrame.gameletsdk);
+                Logger.ERROR(string.format("[PxFrame] application %d URL参数配置不是json格式，当前配置为%s", applicationId, urlDecodedConfig))
+                return
+            end
+        elseif urlConfig == "" then
+            urlConfigTable = {}
+        end
+        PxFrame.AssetInfoMap[applicationId][urlConfigKey] = urlConfigTable;
+        if Common.IsProductEnvironment() then
+            -- 正式环境下不支持读取 URL 地址
+            PxFrame.AssetInfoMap[applicationId][urlConfigKey] = {}
+            urlConfigTable = {}
+        end
+
+        -- 执行前置虚拟机，检查有没有preprocess.js的资源
+        -- 1. [待实现]需要知道一个活动中有没有前置虚拟机？其实就是检查文件。SDK应该有一个接口，告诉我每个活动的Zip文件中是否有指定的文件
+        -- 2. 前置虚拟机是默认打开的。如果需要关闭前置虚拟机，在管理端设置一个 startup_config 的开关， 其值如果是{"enable_preprocess_vm":"false"}， 则本活动不再加载前置虚拟机
+        -- 3. Root不需要主动销毁，如果被游戏销毁了Root下次有前置虚拟机时再创建
+        -- 4. 前置虚拟机的入口文件名是preprocess.html
+        -- 确定是否使用前置虚拟机
+        if startupTbl and startupTbl.enable_preprocess_vm == "true" then
+            -- 准备运行前置虚拟机
+            local isUsePreVM = false;
+            if tblCommand["assetNameList"] then
+                -- 确保当前的资源包存在[此处判断可选]
+                local assetNameTable = self:stringSplit(tblCommand["assetNameList"], '|');
+                for _, fileFullName in pairs(assetNameTable) do
+                    local assetName = applicationAssetName .."_bin.zip"
+                    if assetName == fileFullName then
+                        isUsePreVM = true;
+                    end
+                end
+            end
+
+            if isUsePreVM then
+                local preUrl = urlConfigTable and urlConfigTable.preprocess
+                local preArgs = urlConfigTable and urlConfigTable.args
+                self:enterCreatePanelTask( {preUrl = preUrl, preArgs = preArgs, applicationAssetName = applicationAssetName, appId = applicationId} )
+                -- 启动数据虚拟机上报
+                Common.ReportToTdm("数据虚拟机启动",  "preVMRun", 0, applicationId, PxFrame.gameletsdk);
+            end
+        end
+    end
+end
+
+function mt:enterCreatePanelTask(task)
+    table.insert(createPanelTaskQueue,task);
+    self:runCreatePanelTask();
+end
+
+function mt:runCreatePanelTask()
+    if not tasklock then
+        -- 状态闲
+        local task = createPanelTaskQueue[1]
+        if not task then return end;
+        table.remove(createPanelTaskQueue, 1)
+        if preProcessVMRootObject then
+            self:OnCreatePreProcessPanel(task, preProcessVMRootObject);
+        else
+            tasklock = true;
+            Common.CreatePanel(preProcessPanelName, function (obj)
+                self:OnCreatePreProcessPanel(task, obj)
+            end)
+        end
+    end
+end
+
+function mt:OnCreatePreProcessPanel(task , gameObject)
+    -- LuaPanda.BP();
+    local preUrl = task.preUrl
+    local preArgs = task.preArgs
+    local assetName = task.applicationAssetName
+    local appId = task.appId
+
+    local entranceHtml = preProcesshtmlEntrance .. ".html"
+    local action
+    if preUrl then
+        entranceHtml = preUrl
+        Logger.WARN("[PxFrame] 打开活动数据虚拟机" .. appId  .. "，资源配置了 URL 链接：" .. preUrl)
+    else
+        action = assetName
+    end
+
+    preProcessVMRootObject = gameObject;
+    preProcessVMRootObject:SetActive(true);
+    preProcessVMRootObject.transform:SetParent(Common.GetPandoraGameObject().transform) -- 把根节点设置在PandoraGameObject上
+    tasklock = true;
+
+    -- 检查 URL中是否有 ? , 如果有，参数作为&追加到URL后面
+    local querySplitSym = '?'
+    if string.find(entranceHtml, '?', 1, true) then
+        querySplitSym = '&'
+    end
+
+    if preArgs then
+        entranceHtml = entranceHtml .. querySplitSym .. tostring(preArgs) .. "&_sdk_info=openplatform_unity&_sdk_version="..Common.GetSDKVersion() .. "&_isProductEnv=" .. tostring(Common.IsProductEnvironment())  .. "&_appId=" .. tostring(appId) .. "&_gameServiceFrameVersion=" .. gameServiceFrameVersion;
+    else
+        entranceHtml = entranceHtml .. querySplitSym .. "_sdk_info=openplatform_unity&_sdk_version="..Common.GetSDKVersion() .. "&_isProductEnv=" .. tostring(Common.IsProductEnvironment()) .. "&_appId=" .. tostring(appId) .. "&_gameServiceFrameVersion=" .. gameServiceFrameVersion;
+    end
+
+    if action then
+        entranceHtml = string.format("%s/%s", action, entranceHtml);
+    end
+    local preWindowID = CSharpInterface.LoadPxWindow(gameObject, action, entranceHtml)
+    PxFrame.PreProcessInfoMap[appId] = {}
+    PxFrame.PreProcessInfoMap[appId].windowId = preWindowID;
+    PxFrame.PreProcessInfoMap[appId].assetName = assetName;
+    PxFrame.PreProcessInfoMap[appId].url = preUrl;
+    PxFrame.PreProcessInfoMap[appId].args = preArgs;
+    tasklock = false;
+    self:runCreatePanelTask()
+end
+
+-- 向 entranceConfig中注入了 type，content，appId，appName
+function mt:AddApplicationEntranceConfig(applicationId, entranceTbl)
+    entranceTbl.type = entranceTbl.type or "pandoraGameletShowEntrance"
+    entranceTbl.content = entranceTbl.content or "1"
+    entranceTbl.appId = tostring(applicationId)
+    entranceTbl.appName = tostring(PxFrame.AssetInfoMap[applicationId]["appName"])
+    Common.CallGameByTable(entranceTbl)
+    Logger.DEBUG(string.format("[PxFrame] CallGame :" .. JsonManager.EncodeJson(entranceTbl)))
+end
+
+function mt:OpenPanel(appId , protocalParams)
+    local url = protocalParams["url"]
+    local args = protocalParams["args"]
+    local module = protocalParams["module"] or protocalParams["appName"]
+    local mainpage = protocalParams["mainpage"] or protocalParams["entrance"] or htmlEntrance
+
+    if string.sub(mainpage, -5) == ".html" then
+        mainpage = string.sub(mainpage, 1, -6)
+    end
+
+    local entranceHtml = mainpage .. ".html"
+
+    if string.sub(entranceHtml, -5) ~= ".html" then
+        Logger.WARN(string.format("[PxFrame] OpenPanel | mainpage 没有类型后缀：" .. entranceHtml ))
+    end
+
+    if isNGUIUsed == true and isNguiMaskPanelCreate == false then
+        Common.CreatePanel(nguiMaskPanelName, function() Logger.DEBUG("NGUI Mask created"); isNguiMaskPanelCreate = true; end)
+    end
+
+    local action;
+    -- 检查是否管理端配置了URL
+    local netSetURL
+    if PxFrame.AssetInfoMap[appId] and PxFrame.AssetInfoMap[appId][urlConfigKey] then
+        if mainpage  == "index" then
+            netSetURL = PxFrame.AssetInfoMap[appId][urlConfigKey].index or PxFrame.AssetInfoMap[appId][urlConfigKey].url
+        else
+            netSetURL = PxFrame.AssetInfoMap[appId][urlConfigKey][mainpage]
+        end
+
+        if netSetURL then
+            Logger.WARN("[PxFrame] 打开活动 appId" .. appId  ..  " 入口：" .. mainpage .."，资源配置了 URL 链接：" .. netSetURL)
+        end
+    end
+
+    if url or netSetURL then
+        entranceHtml = url
+        if netSetURL and netSetURL ~= "" and type(netSetURL) == "string" then
+            entranceHtml = netSetURL
+        end
+    else
+        local appName = PxFrame.AssetInfoMap[appId]["assetName"];
+        action = appName
+    end
+
+    -- 检查是否管理端配置了Args
+    local netSetArgs
+    if PxFrame.AssetInfoMap[appId] and PxFrame.AssetInfoMap[appId][urlConfigKey] and PxFrame.AssetInfoMap[appId][urlConfigKey].args then
+        netSetArgs = PxFrame.AssetInfoMap[appId][urlConfigKey].args
+    end
+
+    -- 检查 URL中是否有 ? , 如果有，参数作为&追加到URL后面
+    local querySplitSym = '?'
+    if string.find(entranceHtml, '?', 1, true) then
+        querySplitSym = '&'
+    end
+    if args or netSetArgs then
+        if netSetArgs and netSetArgs ~= "" and type(netSetArgs) == "string" then
+            entranceHtml = entranceHtml .. querySplitSym .. tostring(netSetArgs) .. "&_sdk_info=openplatform_unity&_sdk_version="..Common.GetSDKVersion().. "&_isProductEnv=" .. tostring(Common.IsProductEnvironment()).. "&_appId=" .. tostring(appId) .. "&_gameServiceFrameVersion=" .. gameServiceFrameVersion;
+        else
+            entranceHtml = entranceHtml .. querySplitSym .. tostring(args) .. "&_sdk_info=openplatform_unity&_sdk_version="..Common.GetSDKVersion() .. "&_isProductEnv=" .. tostring(Common.IsProductEnvironment()) .. "&_appId=" .. tostring(appId) .. "&_gameServiceFrameVersion=" .. gameServiceFrameVersion;
+        end
+    else
+        entranceHtml = entranceHtml .. querySplitSym .. "_sdk_info=openplatform_unity&_sdk_version="..Common.GetSDKVersion() .. "&_isProductEnv=" .. tostring(Common.IsProductEnvironment()) .. "&_appId=" .. tostring(appId) .. "&_gameServiceFrameVersion=" .. gameServiceFrameVersion;
+    end
+
+    local rootGo = self:GetRootPanel(PxFrame.ActionInfoMap[appId][mainpage]["parentPath"], module)
+    if rootGo then
+        -- 记录实际使用的父节点信息，以备查询
+        Logger.DEBUG("[PxFrame] GetRootPanel success | realParentPath:" .. rootGo.name)
+        PxFrame.ActionInfoMap[appId][mainpage]["realParentPath"] = rootGo.name;
+    else
+        Logger.WARN("[PxFrame] GetRootPanel fail | parentPath:" .. PxFrame.ActionInfoMap[appId][mainpage]["parentPath"] .. " module:".. tostring(module))
+    end
+
+    if action then
+        entranceHtml = string.format("%s/%s", action, entranceHtml);
+    end
+    local windowId = CSharpInterface.LoadPxWindow(rootGo, action, entranceHtml)
+    PxFrame.ActionInfoMap[appId][mainpage].windowId = windowId;
+end
+
+-- 关闭数据虚拟机 window
+function mt:ClosePreProcessPanel(appId, windowId)
+    if appId == nil and windowId == nil then return false end
+    if appId ~= nil and windowId == nil then
+        -- 从appid获取windowid
+        if  PxFrame.PreProcessInfoMap[appId] and PxFrame.PreProcessInfoMap[appId].windowId then
+            windowId = PxFrame.PreProcessInfoMap[appId].windowId;
+        else
+            return false;
+        end
+    elseif appId == nil and windowId ~= nil then
+        -- 从windowid获取appid
+        for _appId, _obj in pairs(PxFrame.PreProcessInfoMap) do
+            if _obj.windowId == windowId then
+                appId = _appId;
+                break;
+            end
+        end
+        if appId == nil then
+            return false;
+        end
+    end
+    Logger.DEBUG(string.format("[PxFrame] ClosePreProcessPanel | appId:%s windowId:%s" , appId,  windowId))
+    CSharpInterface.RemovePxWindow(windowId)
+    PxFrame.PreProcessInfoMap[appId] = nil;
+    return true;
+end
+
+-- 关闭活动虚拟机（不包含数据虚拟机）
+function mt:ClosePanelByAppId(appId)
+    if appId == nil then return false end
+    -- 从appid获取windowid
+    if PxFrame.ActionInfoMap[appId] then
+        for _mainpage, _pageinfo in pairs(PxFrame.ActionInfoMap[appId]) do
+            CSharpInterface.RemovePxWindow(_pageinfo.windowId)
+            Logger.DEBUG(string.format("[PxFrame] ClosePanelByAppId appId:%s | windowId:%s ", appId, _pageinfo.windowId))
+        end
+    else
+        return false;
+    end
+
+    PxFrame.ActionInfoMap[appId] = nil;
+    -- 面板全部关闭时才销毁 NguiMaskPanel
+    if isNguiMaskPanelCreate == true and not self:checkHasWindowShow() then
+        Common.DestroyPanel(nguiMaskPanelName)
+        isNguiMaskPanelCreate = false;
+    end
+    Common.OpenPlatformReportStats(0, 0, 105, appId, 0, "", 0, "开放平台活动关闭", 0, 0, 0, 0, 0, 0)
+    return true;
+end
+
+-- 关闭活动虚拟机（不包含数据虚拟机）
+function mt:ClosePanelByWindowId(windowId)
+    if windowId == nil then return false end
+    local url = "";
+    local appId, mainpage = PxFrame.GetAppIdandMainpageByWindowId(windowId);
+
+    if appId > 0 and mainpage ~= "" and PxFrame.ActionInfoMap[appId] and PxFrame.ActionInfoMap[appId][mainpage] then
+        Logger.DEBUG(string.format("[PxFrame] ClosePanelByWindowId appId:%s | windowId:%s ", appId , PxFrame.ActionInfoMap[appId][mainpage].windowId))
+        CSharpInterface.RemovePxWindow(PxFrame.ActionInfoMap[appId][mainpage].windowId);
+        PxFrame.ActionInfoMap[appId][mainpage] = nil
+        if isNguiMaskPanelCreate == true and not self:checkHasWindowShow() then
+            Common.DestroyPanel(nguiMaskPanelName)
+            isNguiMaskPanelCreate = false;
+        end
+        Common.OpenPlatformReportStats(0, 0, 105, appId, 0, "", 0, "开放平台活动关闭", 0, 0, 0, 0, 0, 0)
+
+        return true
+    end
+
+    return false
+end
+
+------------------------------------------------
+-- 工具方法
+------------------------------------------------
+
+-- 返回table中成员的数量
+function mt:TableMemberNum(tab)
+    local count = 0;
+    for _, _ in pairs(tab) do
+        count = count + 1;
+    end
+    return count;
+end
+
+function mt:IsMsgBelongToPxFrame(module, tab)
+    for key, value in pairs(PxFrame.AssetInfoMap) do
+        if value[entranceConfigKey] and value[entranceConfigKey].module == module and value[entranceConfigKey].tab == tab then
+            return true, key
+        end
+    end
+    return false, -1
+end
+
+function mt:IsMsgBelongToPxFrameByAppname(appName)
+    for key, value in pairs(PxFrame.AssetInfoMap) do
+        if value.appName and (string.lower(value.appName) == string.lower(appName)) then
+            return true, key
+        end
+    end
+    return false, -1
+end
+
+-- 把字符串按reps分割成并放入table
+-- @str 目标串
+-- @reps 分割符。注意这个分隔符是一个pattern
+function mt:stringSplit( str, separator )
+    local retStrTable = {}
+    string.gsub(str, '[^' .. separator ..']+', function ( word )
+        table.insert(retStrTable, word)
+    end)
+    return retStrTable;
+end
+
+-- 分割，注意适配
+function mt:ParsePxResourceName(assetUrlList)
+    local splitedUrlTbl = StringTool.Split(assetUrlList, "|")
+    -- Logger.TablePrinter(splitedUrlTbl, "split")
+    local targetTbl = {}
+    for _, value in ipairs(splitedUrlTbl) do
+        if string.find(value, "bin") ~= nil then
+            local pattern = "[_\\/]*(%w+)_bin"
+            local target = string.match(value, pattern)
+            if target == nil then
+                Logger.ERROR("[PxFrame] Px 热更包命名不符合规范，当前命名为：" .. value)
+            else
+                Logger.DEBUG(string.format("target:%s,origin:%s", target, value))
+                table.insert(targetTbl, target)
+            end
+        end
+    end
+
+    if #targetTbl == 0 then
+        Logger.ERROR("[PxFrame] 没有找到Pix活动热更包")
+        return nil
+    end
+
+    if #targetTbl ~= 1 then
+        local combinedOriginalName = ""
+        for _, value in ipairs(splitedUrlTbl) do
+            if string.find(value, "bin") ~= nil then
+                combinedOriginalName = combinedOriginalName .. value .. ";"
+            end
+        end
+        Logger.ERROR(string.format("[PxFrame] Pix活动热更包只能有1个,当前有 %d 个，名称如下：%s", #targetTbl, combinedOriginalName))
+        return nil
+    end
+
+    return targetTbl[1]
+end
+
+-- 检查是否还有活动被展示
+function mt:checkHasWindowShow()
+    for _, _ in pairs(PxFrame.ActionInfoMap) do
+        return true;
+    end
+    return false;
+end
+
+function mt:GetRootPanel(parentPath, module)
+    local root;
+
+    if CSharpInterface.GetPanelParent and parentPath then
+        -- 这个接口是王者特有的，通用SDK没有GetPanelParent
+        root = CSharpInterface.GetPanelParent(parentPath)
+    elseif CSharpInterface.GetPanelParent and module then
+        root = CSharpInterface.GetPanelParent(module)
+    end
+
+    if not root and parentPath then
+        root = UnityEngine.GameObject.Find(parentPath)
+    end
+
+    if not root then
+        root = UnityEngine.GameObject.Find("Canvas")
+    end
+    return root
+end
+
+------------------------------------------------
+-- 对外全局方法
+------------------------------------------------
+
+-- argsTable 可选参数，无参数时可以填 {} 或 nil
+-- mainpage 可选参数，无值时可以填"" 或 nil
+-- actManagerTag 是标识一个活动的范围，用于后期可以关闭属于某个 actManagerTag 的活动。可选参数，无值时可以填 "" 或nil
+function PxFrame.OpenWindow(appId, parentPath, argsTable, mainpage, actManagerTag)
+    appId = tonumber(appId)
+    if not appId then
+       Logger.WARN("[PxFrame] PxFrame.OpenWindow fail | appId:" .. tostring(appId))
+       return
+    end
+
+    Logger.DEBUG(string.format("[PxFrame] PxFrame.OpenWindow | appId:%s  parentPath:%s  mainpage:%s  actManagerTag:%s" , tostring(appId), tostring(parentPath) , tostring(mainpage), tostring(actManagerTag)))
+
+    if mainpage == "" then mainpage = nil end
+    if actManagerTag == "" then actManagerTag = nil end
+
+    local msgTab = {
+        appId = appId,
+        type = "open",
+        parentPath = parentPath,
+        actManagerTag = actManagerTag,
+        mainpage = mainpage
+    }
+
+    -- argsTable的信息注入消息结构体
+    if type(argsTable) == "table" then
+        for key, value in pairs(argsTable) do
+            if not msgTab[key] then
+                msgTab[key] = value
+            end
+        end
+    end
+
+    PxFrame.Instance:OnGameCommand(JsonManager.EncodeJson(msgTab))
+end
+
+-- mainpage 可选参数，无值时可以填"" 或 nil
+-- actManagerTag 是标识一个活动的范围，用于后期可以关闭属于某个 actManagerTag 的活动。可选参数，无值时可以填 "" 或nil
+function PxFrame.CloseWindow(appId, mainpage, actManagerTag)
+    appId = tonumber(appId)
+    if not appId then
+        Logger.WARN("[PxFrame] PxFrame.CloseWindow fail | appId:" .. tostring(appId))
+        return
+     end
+
+     Logger.DEBUG(string.format("[PxFrame] PxFrame.CloseWindow | appId:%s  mainpage:%s  actManagerTag:%s" , tostring(appId), tostring(mainpage), tostring(actManagerTag)))
+
+     if mainpage == "" then mainpage = nil end
+     if actManagerTag == "" then actManagerTag = nil end
+
+     local msgTab = {
+         appId = appId,
+         type = "close",
+         actManagerTag = actManagerTag,
+         mainpage = mainpage
+     }
+
+     PxFrame.Instance:OnGameCommand(JsonManager.EncodeJson(msgTab))
+end
+
+-- argsTable 可选参数，无参数时可以填 {} 或 nil
+-- mainpage 可选参数，无值时可以填"" 或 nil
+function PxFrame.HideWindow(appId, mainpage)
+    appId = tonumber(appId)
+    if not appId then
+        Logger.WARN("[PxFrame] PxFrame.HideWindow fail | appId:" .. tostring(appId))
+        return
+    end
+
+    Logger.DEBUG(string.format("[PxFrame] PxFrame.HideWindow | appId:%s  mainpage:%s" , tostring(appId), tostring(mainpage)))
+
+    if mainpage == "" then mainpage = nil end
+    mainpage = mainpage or "index";
+
+    if PxFrame.ActionInfoMap[appId] and PxFrame.ActionInfoMap[appId][mainpage] and PxFrame.ActionInfoMap[appId][mainpage].windowId then
+        local windowId = PxFrame.ActionInfoMap[appId][mainpage].windowId
+        local obj  = CSharpInterface.GetWindowRoot(windowId)
+        obj:SetActive(false)
+    end
+end
+
+-- argsTable 可选参数，无参数时可以填 {} 或 nil
+-- mainpage 可选参数，无值时可以填"" 或 nil
+function PxFrame.ShowWindow(appId, mainpage)
+    appId = tonumber(appId)
+    if not appId then
+        Logger.WARN("[PxFrame] PxFrame.ShowWindow fail | appId:" .. tostring(appId))
+        return
+    end
+
+    Logger.DEBUG(string.format("[PxFrame] PxFrame.ShowWindow | appId:%s  mainpage:%s" , tostring(appId), tostring(mainpage)))
+
+    if mainpage == "" then mainpage = nil end
+    mainpage = mainpage or "index";
+
+    if PxFrame.ActionInfoMap[appId] and PxFrame.ActionInfoMap[appId][mainpage] and PxFrame.ActionInfoMap[appId][mainpage].windowId then
+        local windowId = PxFrame.ActionInfoMap[appId][mainpage].windowId
+        local obj  = CSharpInterface.GetWindowRoot(windowId)
+        obj:SetActive(true)
+    end
+end
+
+-- argsTable 可选参数，无参数时可以填 {} 或 nil
+-- mainpage 可选参数，无值时可以填"" 或 nil
+function PxFrame.sendMsgToActivity(appId, argsTable, mainpage)
+    appId = tonumber(appId)
+    if not appId then
+        Logger.WARN("[PxFrame] PxFrame.sendMsgToActivity fail | appId:" .. tostring(appId))
+        return
+    end
+
+    Logger.DEBUG(string.format("[PxFrame] PxFrame.sendMsgToActivity | appId:%s  mainpage:%s " , tostring(appId), tostring(mainpage)))
+
+    if mainpage == "" then mainpage = nil end
+    local msgTab = {
+        appId = appId,
+        mainpage = mainpage
+    }
+
+    -- argsTable的信息注入消息结构体
+    if type(argsTable) == "table" then
+        for key, value in pairs(argsTable) do
+            if not msgTab[key] then
+                msgTab[key] = value
+            end
+        end
+    end
+
+    PxFrame.Instance:OnGameCommand(JsonManager.EncodeJson(msgTab))
+end
+
+-- 获取应用的 appId 和 mainpage
+-- @return appId, mainpage 或 -1,""(失败)
+function PxFrame.GetAppIdandMainpageByWindowId(windowId)
+    -- 检查数据虚拟机
+    for _appId, _value in pairs(PxFrame.PreProcessInfoMap) do
+        if windowId == _value.windowId then
+            return _appId, "preprocess";
+        end
+    end
+
+    -- 检查活动虚拟机
+    for _appId, _value in pairs(PxFrame.ActionInfoMap) do
+        for _mainpage, _info in pairs(_value) do
+            if windowId == _info.windowId then
+                return _appId, _mainpage;
+            end
+        end
+    end
+    return -1, ""
+end
+
+-- 获取应用的appid, 查询失败时返回 -10001
+-- @return AppId 或 -10001(失败)
+function PxFrame.GetAppIdByAppName(appName)
+    return Common.GetAppId(string.lower(appName))
+end
+
+-- 从 appId 获取 AppName. 如果获取不到，返回 ""
+-- @return appName 或 ""(失败)
+function PxFrame.GetAppNameByAppId(appId)
+    if not PxFrame.AssetInfoMap[appId] then
+        return ""
+    end
+
+    return PxFrame.AssetInfoMap[appId].assetName
+end
+
+-- 数据暂存接口，用于pixui活动把数据暂存到内存中。这个接口在Common中有同样的实现，外部调用Common接口即可
+function PxFrame.SetDataStash(appId, appKey, dataKey, dataValue)
+    -- if not Common.CheckAppKey(appId, appKey) then
+    --     Logger.ERROR(string.format("[PxFrame] SetDataStash 缓存数据失败，原因是 appKey 校验失败！ appId:%s appKey:%s", appId, appKey));
+    --     Common.ReportToTdm("SetDataStash 缓存数据失败",  "appKeyCheckFail", 0, appId, PxFrame.gameletsdk);
+    --     return false
+    -- end
+
+    if PxFrame.DateStash[appId] == nil then
+        PxFrame.DateStash[appId] = {}
+    end
+    Logger.DEBUG("[PxFrame] SetDataStash 成功缓存了数据！ appId:" .. tostring(appId) .. "  dataKey:" .. tostring(dataKey) .." datatype:" .. type(dataValue) .. "  data:" .. tostring(dataValue)) ;
+    PxFrame.DateStash[appId][dataKey] = dataValue; -- 支持datastash缓存object数据
+    return true
+end
+
+function PxFrame.GetDataStash(appId, dataKey)
+    if PxFrame.DateStash[appId] ~= nil and PxFrame.DateStash[appId][dataKey] ~= nil then
+        Logger.DEBUG("[PxFrame] GetDataStash 获取到了数据！ appId:" .. tostring(appId) .. "  dataKey:" .. tostring(dataKey) .. " datatype:" .. type(PxFrame.DateStash[appId][dataKey]) .. "  data:" .. tostring(PxFrame.DateStash[appId][dataKey]));
+        return PxFrame.DateStash[appId][dataKey];
+    end
+    Logger.WARN("[PxFrame] warning : GetDataStash 取到的数据为空！ appId:" .. tostring(appId) .. "  key:" .. tostring(dataKey));
+    return nil
+end
+
+function PxFrame.ClearDataStash(appId, appKey)
+    -- if not Common.CheckAppKey(appId, appKey) then
+    --     Logger.ERROR(string.format("[PxFrame] ClearDataStash 清除数据失败，原因是 appKey 校验失败！ appId:%s appKey:%s", appId, appKey));
+    --     Common.ReportToTdm("ClearDataStash 清除数据失败",  "appKeyCheckFail", 0, appId, PxFrame.gameletsdk);
+
+    --     return false
+    -- end
+
+    Logger.WARN("[PxFrame] warning : ClearDataStash 清除了数据！ appId:" .. tostring(appId));
+    PxFrame.DateStash[appId] = nil;
+    return true
+end
+
+-- 获取父节点名称，返回值是字符串，如果查询失败返回 ""
+function PxFrame.GetRealParentPath(appId, mainpage)
+    if PxFrame.ActionInfoMap[appId] and  PxFrame.ActionInfoMap[appId][mainpage] and PxFrame.ActionInfoMap[appId][mainpage]["realParentPath"] then
+        return PxFrame.ActionInfoMap[appId][mainpage]["realParentPath"];
+    end
+    return "";
+end
+
+-- 获取沙箱路径，成功返回路径，失败返回空字符串
+-- 沙盒路径中的内容在 iOS 系统存储不足时会被自动清理，开发者需要自己做好备份工作
+-- function PxFrame.GetSandBoxPath(appId, appKey)
+--     if not Common.CheckAppKey(appId, appKey) then
+--         Logger.ERROR(string.format("[PxFrame] GetSandBoxPath 获取沙箱路径失败，原因是 appKey 校验失败！ appId:%s appKey:%s", appId, appKey));
+--         Common.ReportToTdm("GetSandBoxPath 获取沙箱路径失败",  "appKeyCheckFail", 0, appId, PxFrame.gameletsdk);
+--         return ""
+--     end
+--     -- cache/pandora/appsandbox/appname_id/文件
+--     local sandboxpath = string.format("%s/%s_%s" ,CSharpInterface.GetSandboxFolderPath() , PxFrame.AssetInfoMap[appId].assetName ,appId )
+--     return sandboxpath
+-- end
+
+---------------------------------
+-- for URL preview
+---------------------------------
+function mt:SendOpenMessage(pixURL)
+    if pixURL == "" or pixURL == nil then
+        Logger.WARN("[PxFrame] Preview 请输入正确的URL!!!")
+        return;
+    end
+
+    -- 从URL中获取px_appid, px_appname, px_appver参数
+    -- pxFrame收到App_ScanCode消息后会把这些模拟参数记录下来，用于支持活动打开关闭
+    local appId = 0;
+    local appName = ""
+    local parentPath = ""
+    local paramIdx = string.find(pixURL, '?', 1, true);
+    if paramIdx then
+        local paramsStr =  string.sub(pixURL, paramIdx + 1);
+        local paraTab = self:stringSplit(paramsStr, '&')
+        for _, value in ipairs(paraTab) do
+            local onePara = self:stringSplit(value, '=')
+            if onePara[1] == "px_appid" then
+                appId = tostring(onePara[2])
+            end
+            if onePara[1] == "px_appname" then
+                appName = tostring(onePara[2])
+            end
+            if onePara[1] == "px_parentpath" then
+                parentPath = tostring(onePara[2])
+            end
+        end
+    end
+
+    -- Reload 时先关闭所有窗口，再重新打开新窗口
+    local closeTableMsg = {}
+    closeTableMsg.type = "close";
+    closeTableMsg.appId = "*";
+    EventDispatcher.DispatchEvent(Common.GAME_COMMAND, JsonManager.EncodeJson(closeTableMsg))
+
+    -- 给 PxFrame 发消息打开页面
+    local msgTable = {}
+    msgTable.type = "open";
+    msgTable.appId = tostring(appId);
+    msgTable.appName = appName;
+    msgTable.url = pixURL;
+    if parentPath and parentPath ~= "" then
+        msgTable.parentPath = parentPath;
+    else
+        msgTable.parentPath = "Canvas/PreView/PreviewPage/PreviewRootGO";
+    end
+    self:SendScanCodeMsg(msgTable)
+end
+
+function mt:SendScanCodeMsg(tab)
+    -- 把扫码获得的信息追加到applicationTbl中，如果URL没有设置appid,则使用默认值0
+    if tab.appId and not PxFrame.AssetInfoMap[tonumber(tab.appId)] then
+        PxFrame.AssetInfoMap[tonumber(tab.appId)] = {}
+        if tab.appName then
+            PxFrame.AssetInfoMap[tonumber(tab.appId)]["appName"] = tab.appName;
+        end
+    end
+    EventDispatcher.DispatchEvent(Common.GAME_COMMAND, JsonManager.EncodeJson(tab))
+end
+
+mt:Init()
+return mt;

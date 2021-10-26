@@ -1,0 +1,378 @@
+
+require "JsonManager"
+require "StringTool"
+require "EventDispatcher";
+require "Logger";
+local CSharpInterface = com.tencent.pandora.CSharpInterface;
+
+local adapter = {}
+
+local FUNCARG_OP_CODE = {
+    ["ADD_DISPOSABLE_FUNC"] = 0,
+    ["ADD_NONDISPOSABLE_FUNC"] = 1,
+    ["REMOVE_NONDISPOSABLE_FUNC"] = 2,
+}
+
+-- JS 调用原生层白名单方法列表
+-- 白名单的组织按照"活动名-{方法名}"结构 , 如果没有命中白名单，则会按照 default 规则。活动名需要使用小写
+local callLuaWhitelist = {
+    -- 其他活动的限制，可以填写方法名，也可以填写*表示无限制, 如果希望阻止所有可以填写{}
+    default = {"*"},  -- 默认规则为允许访问
+    -- default = {},  -- 默认规则为阻挡访问
+    -- wechat_shipinhao = {
+    --     "Common.GetUserDataTable",
+    --     "Common.CallGame",
+    --     "Common.GetPlatformDesc",
+    --     "Common.GetAppVersion",
+    --     "Common.IsProductEnvironment",
+    --     "Common.SetDataStash",
+    --     "Common.GetDataStash",
+    --     "Common.ReportToTdm",
+    --     "Common.ReportStats",
+    --     "EventDispatcher.DispatchEvent",
+    -- },
+
+}
+
+-- 使用 appId 白名单 , 用法如下
+-- callLuaWhitelist[40] = {
+--     "Common.GetDataStash",
+--     "Common.SetDataStash",
+-- }
+
+
+-- lua层向pixui发送请求
+-- @param json 向游戏传递的json请求串
+local function CallPx(ui, jsonStr)
+    Logger.DEBUG(string.format("windowId: %s, CallPx: %s", tostring(ui), jsonStr));
+    CSharpInterface.LuaCallPx(ui, jsonStr);
+end
+
+local function SafeCall(func, ...)
+    local errmsg
+    local handle = function (err)
+        errmsg = string.format("%s\n%s", tostring(err), debug.traceback())
+        Logger.ERROR(errmsg)
+    end
+
+    local args = {...}
+    local funcWrapper = function ()
+        local unpack = unpack or table.unpack
+        return func(unpack(args))
+    end
+    local ok, ret = xpcall(funcWrapper, handle)
+
+    return ok, errmsg, ret;
+end
+
+local function MakeTableReadonly(t)
+    local proxy = {}
+    local mt = {
+        __index = t,
+        __newindex = function(_, _, _)
+            local stacktrace = debug.traceback()
+            Logger.ERROR("attempt to update a read-only table\n" .. stacktrace)
+        end
+    }
+    setmetatable(proxy, mt)
+    return proxy
+end
+
+-- key=callbackID, value=callback wrapper
+local nondisposableFunctions = {}
+
+local function ParseFunc(func)
+    -- parse func str
+    local parts = StringTool.Split(func, ".")
+    if #parts <= 0 then
+        return nil, nil, nil
+    end
+    local finalPart = parts[#parts]
+    local arr = StringTool.Split(finalPart, ":") 
+    local isStatic = false
+    local arrLen = #arr
+    if arrLen == 1 then
+        isStatic = true
+    elseif arrLen == 2 then
+        local partsLen = #parts
+        parts[partsLen] = arr[1]
+        parts[partsLen + 1] = arr[2]
+    else
+        Logger.WARN(string.format("call %s failed, javascript cmd format invalid", func))
+        return nil, nil, nil
+    end
+
+    local partsLen = #parts
+    -- it's a global function, return _G as scope
+    if partsLen == 1 then
+        return _G, parts[1], isStatic
+    end
+
+    -- it's not a global function, iterate all parts to find the scope of function
+    local scope = _G[parts[1]]
+    if not scope then
+        local ok, err, ret = SafeCall(function()
+            return require(parts[1])
+        end)
+        if not ok then
+            scope = nil
+        else
+            scope = ret
+        end
+    end
+
+    if not scope then
+        Logger.WARN(string.format("call %s failed, scope %s not found", func, parts[1]))
+        return nil, nil, nil
+    end
+
+    for i=2, partsLen-1 do
+        scope = scope[parts[i]]
+        if not scope then
+            Logger.WARN(string.format("call %s failed, scope %s not found", func, parts[i]))
+            return nil, nil, nil
+        end
+    end
+
+    return scope, parts[partsLen], isStatic
+end
+
+local function ArgEncoder_Table(arg) 
+    return {["valuetype"] = "table", ["value"] = JsonManager.EncodeJson(arg)}
+end
+
+local function ArgEncoder_Nil(arg)
+    return {["valuetype"] = "nil"}
+end
+
+local ARG_ENCODERS = {
+    ["table"] = ArgEncoder_Table,
+    ["nil"] = ArgEncoder_Nil,
+}
+
+local function EncodeArgs(argv, argc)
+    local insert = table.insert
+    local argpack = {}
+    for i=1, argc do
+        local v = argv[i]
+        local t = type(v)
+        local encoder = ARG_ENCODERS[t]
+        if encoder then
+            insert(argpack, encoder(v))
+        else
+            insert(argpack, v)
+        end
+    end
+    return argpack
+end
+
+local function FuncArgDecoder_CreateDisopsableFuncWrapper(ui, arg)
+    local callbackID = arg.callbackID
+    local wrapper = function(...)
+        local argv = {...}
+        local argc = select('#', ...)
+        -- call javascript callback with args
+        local cmdToJavascript = {}
+        cmdToJavascript.cmd = "InvokeJavascriptDisposableCallback"
+        cmdToJavascript.args = EncodeArgs(argv, argc)
+        cmdToJavascript.callbackID = callbackID
+        Logger.INFO("posting message to javascript, msg: " .. JsonManager.EncodeJson(cmdToJavascript))
+        CallPx(ui, JsonManager.EncodeJson(cmdToJavascript))
+    end
+    return wrapper
+end
+
+local function FuncArgDecoder_CreateNondisposableFuncWrapper(ui, arg)
+    -- create wrapper and add to global callback table
+    local callbackID = arg.callbackID
+    local wrapper = function (...)
+        local argv = {...}
+        local argc = select('#', ...)
+        local cmdToJavascript = {}
+        cmdToJavascript.cmd = "InvokeJavascriptNondisposableCallback"
+        cmdToJavascript.args = EncodeArgs(argv, argc)
+        cmdToJavascript.callbackID = callbackID
+        Logger.INFO("posting message to javascript, msg: " .. JsonManager.EncodeJson(cmdToJavascript))
+        CallPx(ui, JsonManager.EncodeJson(cmdToJavascript))
+    end
+    nondisposableFunctions[callbackID] = wrapper
+    return wrapper
+end
+
+local function FuncArgDecoder_GetNondisposableFuncWrapper(ui, arg)
+    -- get wrapper from global callback table and delete it
+    local callbackID = arg.callbackID
+    local wrapper = nil
+    if callbackID then
+        wrapper = nondisposableFunctions[callbackID]
+        nondisposableFunctions[callbackID] = nil
+    end
+    return wrapper
+end
+
+local FUNCARG_DECODERS = {
+    [FUNCARG_OP_CODE.ADD_DISPOSABLE_FUNC] = FuncArgDecoder_CreateDisopsableFuncWrapper,
+    [FUNCARG_OP_CODE.ADD_NONDISPOSABLE_FUNC] = FuncArgDecoder_CreateNondisposableFuncWrapper,
+    [FUNCARG_OP_CODE.REMOVE_NONDISPOSABLE_FUNC] = FuncArgDecoder_GetNondisposableFuncWrapper,
+}
+-- TODO: ADD SUPPORT FOR NONDISPOSABLE CALLBACK
+local function ArgDecoder_Function(ui, arg)
+    local callbackID = arg.callbackID
+    local funcOpCode = arg.funcOpCode
+    local decoder = FUNCARG_DECODERS[funcOpCode]
+    if not decoder then
+        return nil
+    end
+    return decoder(ui, arg)
+end
+
+local function ArgDecoder_Table(ui, arg)
+    local jsonstr = arg.value
+    local tbl = JsonManager.DecodeJson(jsonstr)
+    return tbl
+end
+
+local function ArgDecoder_Nil(ui, arg)
+    return nil
+end
+
+local ARG_DECODERS = {
+    ["function"] = ArgDecoder_Function,
+    ["table"] = ArgDecoder_Table,
+    ["nil"] = ArgDecoder_Nil,
+}
+
+local function DecodeArgs(ui, args)
+    local parsedArgs, insert = {}, table.insert
+    if not args then
+        return parsedArgs, 0
+    end
+
+    for i=1, #args do
+        local arg = args[i]
+        if type(arg) == "table" then
+            local decoder = ARG_DECODERS[arg.valuetype]
+            if not decoder then
+                insert(parsedArgs, nil)
+            else
+                insert(parsedArgs, decoder(ui, arg))
+            end
+        else
+            insert(parsedArgs, arg)
+        end
+    end
+    return parsedArgs, #args
+end
+
+local function SendLuaCallResultToJavascript(ui, isSuccess, err, callbackID, args)
+    local cmdToJavascript = {}
+    cmdToJavascript.args = args
+    cmdToJavascript.cmd = "ProcessLuaReturn"
+    cmdToJavascript.callbackID = callbackID
+    cmdToJavascript.callSuccess = isSuccess
+    cmdToJavascript.err = err
+    local jsonstr = JsonManager.EncodeJson(cmdToJavascript)
+    Logger.INFO("posting message to javascript, msg: " .. jsonstr)
+    CallPx(ui, jsonstr);
+end
+
+local function CallLua(ui, cmd)
+    local funcstr, args = cmd.func, cmd.args
+    if not funcstr then
+        return
+    end
+    local scope, funcName, isStatic = ParseFunc(funcstr)
+    if not scope then
+        SendLuaCallResultToJavascript(ui, false, string.format("function name [%s] invalid", funcstr), cmd.callbackID, {})
+        Logger.WARN(string.format("function name [%s] invalid", funcstr))
+        return
+    end
+    if not scope[funcName] then
+        SendLuaCallResultToJavascript(ui, false, string.format("function name [%s] invalid", funcstr), cmd.callbackID, {})
+        Logger.WARN(string.format("function name [%s] invalid", funcstr))
+        return
+    end
+    if not type(scope[funcName]) == "function" then
+        SendLuaCallResultToJavascript(ui, false, string.format("function name [%s] invalid", funcstr), cmd.callbackID, {})
+        Logger.WARN(string.format("function name [%s] invalid", funcstr))
+        return
+    end
+
+    -- check call function is in whitelist
+    local appId = PxFrame.GetAppIdandMainpageByWindowId(ui);
+    local assetName = PxFrame.GetAppNameByAppId(appId);
+    if not checkIsInWhiteFunctionlist(appId, assetName, funcstr) then
+        SendLuaCallResultToJavascript(ui, false, string.format("function name [%s] not in whitelist", funcstr), cmd.callbackID, {})
+        Logger.WARN(string.format("function name [%s] not in whitelist", funcstr))
+        return
+    end
+
+    local argv, argc = DecodeArgs(ui, args)
+    local func = scope[funcName]
+    if type(func) ~= "function" then
+        return nil
+    end
+    local wrapper = nil
+    if isStatic then
+        wrapper = function()
+            return {func(unpack(argv, 1, argc))}
+        end
+    else
+        wrapper = function()
+            return {func(scope, unpack(argv, 1, argc))}
+        end
+    end
+    local ok, err, ret = SafeCall(wrapper)
+    local success = false
+    if not ok then
+        -- should report to tnm2
+        CSharpInterface.ReportLuaError(string.format("PixUIAdapter: call [%s] failed, err: \n%s", funcstr, err));
+        ret = {}
+    else
+        -- do nothing
+        success = true
+    end
+    if not ret then
+        return;
+    end
+    SafeCall(SendLuaCallResultToJavascript,ui, success, err, cmd.callbackID, EncodeArgs(ret, #ret))
+end
+-- 检查当前的访问是否应该被阻止
+function checkIsInWhiteFunctionlist(appId, assetName, functionstr)
+    if appId == -1 or appId == nil or assetName == nil then return true end
+
+    local whiteFuncList = callLuaWhitelist[assetName] or callLuaWhitelist[appId] or callLuaWhitelist["default"]
+    for _, value in pairs(whiteFuncList) do
+        if value == "*" then
+            return true;
+        elseif value == functionstr then
+            return true;
+        end
+    end
+    return false;
+end
+
+--[[
+    cmd object = {
+        ["func"] = "Common.DestroyPanel",
+        ["args"] = { ... }
+    }
+]]
+function adapter.CallLua(ui, jsonstr)
+    Logger.INFO("received message from javascript: " .. jsonstr)
+    local cmd = JsonManager.DecodeJson(jsonstr)
+    if not cmd then
+        Logger.WARN("javascript cmd decode failed")
+        return
+    end
+    CallLua(ui, cmd)
+end
+
+function adapter.init()
+    EventDispatcher.AddEventListener(Common.PX_COMMAND, adapter.CallLua);
+end
+
+adapter = MakeTableReadonly(adapter)
+adapter.init();
+
+return adapter

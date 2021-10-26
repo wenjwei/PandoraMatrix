@@ -1,0 +1,68 @@
+require "Logger";
+
+local WINDOWS_EDITOR = 7;
+if UnityEngine.Application.platform ~= WINDOWS_EDITOR then
+    return;
+end
+
+local CSharpInterface = com.tencent.pandora.CSharpInterface;
+local LUA_SCRIPT_EXCEPTION = Slua.GetClass("com.tencent.pandora.ErrorCode").LUA_SCRIPT_EXCEPTION;
+local LUA_SCRIPT_EXCEPTION_DETAIL = Slua.GetClass("com.tencent.pandora.ErrorCode").LUA_SCRIPT_EXCEPTION_DETAIL;
+-- tnm2字符型告警类型
+local TNM2_TYPE_LITERALS = 2;
+
+-- only start in editor
+Logger.DEBUG("start lua monitor");
+
+LuaMonitor = {};
+LuaMonitor.MonitorData = {};
+
+function LuaMonitor.Monitor(actionName)
+    LuaMonitor.MonitorData[actionName] = {};
+end
+
+function LuaMonitor.AddWhitelist(actionName, whitelist)
+    if LuaMonitor.MonitorData[actionName] == nil then
+        return;
+    end
+
+    for key, type in pairs(whitelist) do
+        LuaMonitor.MonitorData[actionName][key] = type;
+    end
+end
+
+local start = function()
+    local monitor = function(table, key, value)
+        local invokeFile = debug.getinfo(2, "S").source;
+        local actionName = invokeFile:match("Actions/Resources/(.*)/Lua");
+        local msg;
+        if LuaMonitor.MonitorData[actionName] ~= nil then
+            if LuaMonitor.MonitorData[actionName][tostring(key)] ~= tostring(type(value)) then
+                -- 非白名单key-type上报全局赋值错误
+                msg = string.format([["%s set global var %s, type: %s,
+                    敏感操作：全局变量赋值，如果已知风险，可将 %s='%s', 加入%sMonitor.lua.bytes白名单列表"]],
+                    actionName, tostring(key), tostring(type(value)), tostring(key), tostring(type(value)), actionName);
+            else
+                if string.sub(tostring(key), 1, string.len(actionName)) ~= actionName then
+                    -- 活动层全局变量名，必须带上活动名前缀
+                    msg = string.format([["%s set global var %s, type: %s,
+                        敏感操作：全局变量赋值，活动层全局变量名，必须带上活动名前缀，如 %s%s"]],
+                        actionName, tostring(key), tostring(type(value)), actionName, tostring(key));
+                end
+            end
+
+            if msg ~= nil then
+                Logger.ERROR(msg);
+                local reportMsg = "【只会在编辑器模式下上报】" .. msg;
+                CSharpInterface.ReportError(reportMsg, LUA_SCRIPT_EXCEPTION);
+                CSharpInterface.Report(reportMsg, LUA_SCRIPT_EXCEPTION_DETAIL, TNM2_TYPE_LITERALS);
+            end
+        end
+        rawset(table, key, value);
+    end
+
+    local metaTbl = { __newindex = monitor }
+    setmetatable(_G, metaTbl)
+end
+
+start();

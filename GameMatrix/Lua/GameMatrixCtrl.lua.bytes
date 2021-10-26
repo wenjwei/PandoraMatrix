@@ -1,0 +1,321 @@
+require "Common";
+require "JsonManager";
+require "EventDispatcher";
+require "GameMatrixManager";
+
+local MatrixPanel = require "GameMatrixPanel";
+local MatrixSettings = require "GameMatrixSettings";
+
+local mt = {};
+local MatrixName = "GameMatrix"
+local MatrixEvent = "GameMatrixEvent"
+local MatrixUIType = "NGUI"
+local MatrixUsedTimer = true
+
+function mt:New()
+	local o = {};
+	setmetatable(o, self);
+	self.__index = self;
+	return o;
+end
+
+function mt:Init()
+	local totalSwitch = Common.GetTotalSwitch();
+	if not totalSwitch then
+		self:LogInfo("全量开关关闭, , ,", true);
+		return;
+	end
+
+	local functionSwitch = Common.GetFunctionSwitch(MatrixName);
+	if not functionSwitch then
+		self:LogInfo("落地页开关关闭, , ,", true);
+		return;
+	end
+
+	self.countdownList = {};
+	self:HandleCacheActionData();
+	EventDispatcher.AddEventListener(MatrixEvent, self.OnMatrixEvent, self);
+	EventDispatcher.AddEventListener(Common.GAME_COMMAND, self.OnGameCmdEvent, self);
+end
+
+---- 处理缓存数据
+function mt:HandleCacheActionData()
+	GameMatrixManager.IsCacheData = false;
+	for key, cacheData in pairs(GameMatrixManager.data) do
+		self:OnMatrixEvent(cacheData);
+	end
+	Common.TablePrinter(GameMatrixManager.data, "GameMatrixCacheData:");
+end
+
+---- 处理活动事件
+function mt:OnMatrixEvent(tbParam)
+	if not tbParam or type(tbParam) ~= "table" then
+		self:LogInfo("error_OnMatrixEvent_tbParam", true);
+		return;
+	end
+	if tbParam.type == "pandoraShowMatrix" then
+		MatrixSettings.SendShowEntranceProtocol(tbParam);
+		local newTab = MatrixName .. "_" .. tostring(tbParam.tab);
+		self:OnHandleCountDown(tbParam);
+		return;
+	end
+	if tbParam.type == "pandoraRedpointMatrix" then
+		MatrixSettings.SendShowRedpointProtocol(tbParam);
+		return;
+	end
+	if tbParam.type == "pandoraCloseMatrix" then
+		MatrixSettings.SendCloseActionProtocol(tbParam);
+		return;
+	end
+	Common.TablePrinter(tbParam, "please check tbParam: ");
+end
+
+function mt:OnHandleCountDown(tbParam)
+	if tostring(tbParam.content) ~= "1" or tonumber(tbParam.countdown) <= 0 then
+		return;
+	end
+	if not MatrixUsedTimer then
+		return;
+	end
+	local keyName = MatrixName .. "_" .. tostring(tbParam.tab);
+	if self.countdownList[keyName] then
+		LuaTimer.Delete(self.countdownList[keyName].timerId);
+		self.countdownList[keyName] = nil;
+	end
+	self.countdownList[keyName] = {};
+	self.countdownList[keyName].dataTb = tbParam;
+	self.countdownList[keyName].timerId = LuaTimer.Add(1000, 1000, function ()
+		local countdownTime = tonumber(self.countdownList[keyName].dataTb.countdown);
+		self.countdownList[keyName].dataTb.countdown = countdownTime - 1;
+		if countdownTime <= 0 then
+			self.countdownList[keyName].dataTb.content = "0";
+			self:OnMatrixEvent(self.countdownList[keyName].dataTb);
+			return false;
+		end
+	end);
+end
+
+
+-------------------------------------------------------------------------------
+----------------------------------- 活动状态 -----------------------------------
+-------------------------------------------------------------------------------
+
+---- 处理客户端消息
+function mt:OnGameCmdEvent(jsonCmdStr)
+	self:LogInfo("receive msg from game: " .. tostring(jsonCmdStr))
+
+	local params = JsonManager.DecodeJson(jsonCmdStr);
+	if not jsonCmdStr or not params or type(params) ~= "table" then
+		self:LogInfo("error: jsonCmd is nil", true)
+		return false;
+	end
+
+	local cmdType = "string.lower(tostring(params["type"]))";
+	local actInfo = "string.lower(tostring(params["content"]))";
+	if cmdType and cmdType == "open" then
+		self:OpenActionPanel(actInfo);
+		return true;
+	end
+	if cmdType and cmdType == "hide" then
+		self:HideActionPanel(actInfo);
+		return true;
+	end
+	if cmdType and cmdType == "close" then
+		self:CloseActionPanel(actInfo);
+		return true;
+	end
+	if cmdType and cmdType == "destroy" then
+		self:CloseAllActionPanel();
+		return true;
+	end
+end
+
+---- 打开活动
+function mt:OpenActionPanel(actInfo)
+	MatrixSettings.ShowLoadingPanel();
+
+	if self.panel and self.panel.gameObject then
+		self:LogInfo("refresh to show panel");
+		self:InitUIPanel(actInfo);
+		self.panel.gameObject:SetActive(true);
+		return true;
+	end
+
+	local OnCreatedCallBack = function(gameObject)
+		if not gameObject then
+			self:LogInfo("error: create panel failed", true);
+			MatrixSettings.HideLoadingPanel();
+			return false;
+		end
+		self:LogInfo("success to create panel");
+		self.panel = MatrixPanel:New();
+		self.panel:Init(gameObject);
+		self:InitUIPanel(actInfo);
+		self.panel.gameObject:SetActive(true);
+		return true;
+	end
+	Common.CreatePanel(MatrixName, OnCreatedCallBack);
+end
+
+function mt:InitUIPanel(actInfo)
+	self:LogInfo("展示活动: " .. tostring(actInfo.tab));
+
+	if actInfo.targetUrl and tostring(actInfo.targetUrl) ~= "0" then
+		if self.panel and self.panel.gameObject then
+			self:ShowActionImage(actInfo);
+		end
+		return true;
+	end
+
+	local cmdTb = {};
+	cmdTb.type = "open";
+	cmdTb.module = actInfo.module;
+	cmdTb.tab = actInfo.tab;
+	cmdTb.parentPath = self:GetParentAllNode(self.panel.InnerNode);
+	MatrixSettings.HideLoadingPanel();
+	MatrixSettings.DispatchGameEvent(cmdTb)
+end
+
+function mt:ShowActionImage(actInfo)
+	self:UIButtonEvent(self.panel.ButtonJump, function ()
+		local cmdTb = {};
+		cmdTb.type = "open";
+		cmdTb.module = actInfo.module;
+		cmdTb.tab = actInfo.tab;
+		cmdTb.parentPath = self:GetParentAllNode(self.panel.OuterNode);
+		MatrixSettings.DispatchGameEvent(cmdTb)
+	end)
+
+	local CallBack = function ()
+		MatrixSettings.HideLoadingPanel();
+		self.panel.ImageMain:SetActive(true);
+	end
+	Common.ShowImage(MatrixName, actInfo.targetUrl, self.panel.ImageMain, false, CallBack);
+end
+
+---- 隐藏活动
+function mt:HideActionPanel(actInfo)
+	self:LogInfo("隐藏活动: " .. tostring(actInfo.tab));
+
+	if actInfo.targetUrl and tostring(actInfo.targetUrl) ~= "0" then
+		if self.panel and self.panel.gameObject then
+			self.panel.ImageMain:SetActive(false);
+		end
+		return true;
+	end
+
+	local cmdTb = {};
+	cmdTb.type = "hide";
+	cmdTb.module = actInfo.module;
+	cmdTb.tab = actInfo.tab;
+	MatrixSettings.HideLoadingPanel();
+	MatrixSettings.DispatchGameEvent(cmdTb)
+end
+
+---- 关闭活动
+function mt:CloseActionPanel(actInfo)
+	self:LogInfo("关闭活动: " .. tostring(actInfo.tab));
+
+	if actInfo.targetUrl and tostring(actInfo.targetUrl) ~= "0" then
+		if self.panel and self.panel.gameObject then
+			self.panel.ImageMain:SetActive(false);
+			self:LogInfo("关闭活动: " .. tostring(actInfo.tab));
+		end
+		return true;
+	end
+
+	local cmdTb = {};
+	cmdTb.type = "close";
+	cmdTb.module = actInfo.module;
+	cmdTb.tab = actInfo.tab;
+	MatrixSettings.HideLoadingPanel();
+	MatrixSettings.DispatchGameEvent(cmdTb)
+end
+
+---- 关闭所有活动
+function mt:CloseAllActionPanel()
+	local actInfoList = MatrixSettings.GetActInfoList()
+	for key, value in pairs(actInfoList) do
+		self:CloseActionPanel(value);
+	end
+	self.panel:Dispose();
+	self.panel = nil;
+	Common.DestroyPanel(MatrixName);
+end
+
+
+-------------------------------------------------------------------------------
+----------------------------------- 工具函数 -----------------------------------
+-------------------------------------------------------------------------------
+
+---- 日志输出
+function mt:LogInfo(msgContent, msgType)
+    if msgType then
+        Logger.WARN("[GameMatrix]:" .. msgContent);
+    else
+        Logger.DEBUG("[GameMatrix]:" .. msgContent);
+    end
+end
+
+---- 获取节点路径
+function mt:GetParentAllNode(node)
+	if not node or Slua.IsNull(node) then
+		self:LogInfo("error: node is nil", true);
+		return nil;
+	end
+
+	local path = node.name;
+	while node.transform.parent do
+		node = node.transform.parent.gameObject;
+		path = node.name .. "/" .. path;
+	end
+
+	self:LogInfo("node allpath is: " .. tostring(path));
+	return path;
+end
+
+---- 文本赋值
+function mt:UILabelEvent(node, param)
+	if not node or Slua.IsNull(node) then
+		self:LogInfo("error: node is nil", true);
+		return nil;
+	end
+
+    if MatrixUIType == "UGUI" then
+        node:GetComponent("Text").text = tostring(param);
+        return true;
+    end
+
+	if MatrixUIType == "NGUI" then
+        node:GetComponent("UILabel").text = tostring(param);
+        return true;
+    end
+end
+
+---- 按钮点击
+function mt:UIButtonEvent(node, param)
+	if not node or Slua.IsNull(node) then
+		self:LogInfo("error: node is nil", true);
+		return nil;
+	end
+
+	if MatrixUIType == "NGUI" then
+        UIEventListener.Get(node).onClick = nil;
+        if param and type(param) == "function" then
+            UIEventListener.Get(node).onClick = function() param(); end
+        end
+        return true;
+    end
+
+    if MatrixUIType == "UGUI" then
+        node:GetComponent("Button").onClick:RemoveAllListeners();
+        if param and type(param) == "function" then
+			local clickEvent = function() param(); end
+            node:GetComponent("Button").onClick:AddListener(clickEvent);
+        end
+        return true;
+    end
+end
+
+
+return mt
