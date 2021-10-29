@@ -15,14 +15,8 @@ MatrixSettings.CloseCmd = "close";
 
 -- 设置业务使用的UI类型
 function MatrixSettings.GetUIType()
-    return "NGUI";
-    --return "UGUI";
-end
-
--- 设置是否使用单个活动模块
-function MatrixSettings.GetIsSingleModule()
-    return true;
-    -- return false;
+    return "NGUI"
+    --return "UGUI"
 end
 
 -- 设置使用的活动模块的值, 单个模块会使用第一个值
@@ -31,30 +25,19 @@ function MatrixSettings.GetModuleSettings()
         {
             module = "pandoraTab",
             title = "百晓阁"
-        },
-        {
-            module = "pandoraTab2",
-            title = "精彩活动"
-        },
-        {
-            module = "pandoraTab3",
-            title = "限时活动"
-        },
-    };
-    return tbParam;
+        }
+    }
+    return tbParam
 end
 
 -- 设置使用的活动页签标签的值
 -- 需要和prefab上的图标和数量保持一致
 function MatrixSettings.GetActTabTagSettings()
-    local tbParam = { };
+    local tbParam = { }
     tbParam[1] = "全新"
     tbParam[2] = "推荐"
     tbParam[3] = "公告"
-    tbParam[4] = "回流"
-    tbParam[5] = "火爆"
-    tbParam[6] = "福利"
-    return tbParam;
+    return tbParam
 end
 
 -- 设置注册/注销潘多拉落地页的入口协议

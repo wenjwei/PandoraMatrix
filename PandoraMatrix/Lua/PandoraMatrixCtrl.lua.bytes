@@ -96,138 +96,116 @@ end
 
 ---- 活动入口注册/注销事件处理
 function mt:OnHandleShowMatrix(data)
-	local moduleKey = tostring(data.module)
-	if not actionInformation[moduleKey] then
-		self:LogInfo("error: not set the module " .. moduleKey, true)
+	local moduleKey = tostring(data["module"])
+	if not actionInfoList[moduleKey] then
+		actionInfoList[moduleKey] = {}
+	end
+
+	local tabKey = tostring(data["tab"])
+	if not actionInfoList[moduleKey][tabKey] then
+		actionInfoList[moduleKey][tabKey] = {}
+	end
+	actionInfoList[moduleKey][tabKey]["entrance"] = data
+
+	self:RefreshActEntranceInfo(actionInfoList[moduleKey][tabKey])
+	self:RefreshMatrixActionInfo(actionInfoList[moduleKey])
+end
+
+function mt:RefreshActEntranceInfo(actData)
+	local showStatus = actData["entrance"]["content"]
+	if tostring(showStatus) ~= "1" then
 		return
 	end
 
-	local tabKey = tostring(data.tab)
-	if not self.actInfo[moduleKey][tabKey] then
-		isNewAction = true;
-		self.actInfo[moduleKey][tabKey] = {};
+	local targetUrl = actData["entrance"]["targetUrl"]
+	if tostring(targetUrl) == "0" then
+		return
 	end
-	self.actInfo[moduleKey][tabKey]["entrance"] = actData;
-	self:HandleActionEntranceInfo(actData, isNewAction);
-	self:RefreshMatrixActionInfo(self.actInfo[moduleKey], true);
-end
-
----- 处理活动入口设置
-function mt:HandleActionEntranceInfo(actData, isNewAction)
-	if isNewAction then
-		if tostring(actData.targetUrl) ~= "0" then
-			Common.CacheImage(actData.targetUrl);
-		end
-		if tonumber(actData.countdown) > 0 then
-			local keyName = "PandoraMatrix_" .. tostring(actData.tab);
-			if self.countdownList[keyName] then
-				LuaTimer.Delete(self.countdownList[keyName].timerId);
-				self.countdownList[keyName] = nil;
-			end
-			self.countdownList[keyName] = {};
-			self.countdownList[keyName].dataTb = actData;
-			local callback = function ( )
-				local tbParam = self.countdownList[keyName].dataTb;
-				if tonumber(tbParam.countdown) - 1 > 0 then
-					tbParam.countdown = tonumber(tbParam.countdown) - 1;
-					self.countdownList[keyName].dataTb = tbParam;
-				else
-					tbParam.content = "0";
-					tbParam.countdown = "0";
-					self.countdownList[keyName].dataTb = tbParam;
-					self:OnHandleMatrixEvent(self.countdownList[keyName].dataTb);
-					return false;
-				end
-			end
-			self.countdownList[keyName].timerId = LuaTimer.Add(1000, 1000, callback);
-		end
+	if not Common.IsImageCached(targetUrl) then
+		Common.CacheImage(actData["entrance"]["targetUrl"])
 	end
-	Common.TablePrinter(actData, "活动入口注册/注销框架事件处理");
 end
 
 ---- 活动入口小红点显示/隐藏事件处理
 function mt:OnHandleRedpointMatrix(data)
 	local moduleKey = tostring(data.module)
+	if not actionInfoList[moduleKey] then
+		actionInfoList[moduleKey] = {}
+	end
+
 	local tabKey = tostring(data.tab)
-	if not self.moduleConfigs[moduleKey] then
-		self:LogInfo("该活动模块未配置: " .. moduleKey, true);
-		return;
+	if not actionInfoList[moduleKey][tabKey] then
+		actionInfoList[moduleKey][tabKey] = {}
 	end
-	if not self.actInfo[moduleKey] then
-		isNewAction = true;
-		self.actInfo[moduleKey] = {};
-	end
-	if not self.actInfo[moduleKey][tabKey] then
-		isNewAction = true;
-		self.actInfo[moduleKey][tabKey] = {};
-	end
-	self.actInfo[moduleKey][tabKey]["redpoint"] = actData;
-	self:HandleActionRedpointInfo(actData, isNewAction);
-	self:RefreshMatrixActionInfo(self.actInfo[moduleKey], false);
+	actionInfoList[moduleKey][tabKey]["redpoint"] = data
+
+	self:RefreshActRedpointInfo(actionInfoList[moduleKey][tabKey])
+	self:RefreshMatrixActionInfo(actionInfoList[moduleKey])
 end
 
----- 处理活动入口小红点设置
-function mt:HandleActionRedpointInfo(actData, isNewAction)
-	if isNewAction then
-		-- todo
-	end
-	Common.TablePrinter(actData, "活动入口小红点显示/隐藏框架事件处理");
+function mt:RefreshActRedpointInfo(actData)
+
 end
 
 ---- 更新落地页数据
-function mt:RefreshMatrixActionInfo(actDataList, refresh)
-	local tabInfoList = {};
-	for tabKey, tabValue in pairs(actDataList) do
-		local entrance = tabValue["entrance"];
-		local redpoint = tabValue["redpoint"];
+function mt:RefreshMatrixActionInfo(actDataList)
+	local tabInformationList = {}
+	for actTab, actData in pairs(actDataList) do
+		local entrance = actData["entrance"]
+		local redpoint = actData["redpoint"]
 		if entrance and tostring(entrance["content"]) == "1" then
-			if redpoint then
-				entrance["redpoint"] = redpoint["content"];
+			if redpoint and redpoint["content"] == "1" then
+				entrance["redpoint"] = 1
 			else
-				entrance["redpoint"] = 0;
+				entrance["redpoint"] = 0
 			end
-			table.insert(tabInfoList, entrance);
+			tabInformationList[#tabInformationList + 1] = entrance
 		end
 	end
-	local sortFunction = function (tb1, tb2)
-		if tonumber(tb1.sortId) == tonumber(tb2.sortId) then
-			return tostring(tb1.tab) < tostring(tb2.tab);
-		else
-			return tonumber(tb1.sortId) > tonumber(tb2.sortId);
+
+	if #tabInformationList > 0 then
+		local sortFunction = function (tb1, tb2)
+			if tonumber(tb1["sortId"]) ~= tonumber(tb2["sortId"]) then
+				return tonumber(tb1["sortId"]) > tonumber(tb2["sortId"])
+			else
+				return tostring(tb1["tab"]) < tostring(tb2["tab"])
+			end
 		end
-	end
-	if #tabInfoList > 0 then
-		table.sort(tabInfoList, sortFunction);
-		self.actInfoList[tabInfoList[1].module] = tabInfoList;
-		self:HandleAllTotalActionprotocolInfo();
-		Common.TablePrinter(self.actInfoList, "潘多拉落地页展示活动数据");
+		table.sort(tabInformationList, sortFunction)
+		self:HandleAllTotalActionProtocolInfo(tabInformationList)
 	end
 end
 
----- 落地页入口红点处理
-function mt:HandleAllTotalActionprotocolInfo()
-	local entranceNumber = 0;
-	local redpointNumber = 0;
-	for moduleKey, tabInfoList in pairs(self.actInfoList) do
-		for index, tabInfo in pairs(tabInfoList) do
-			if tonumber(tabInfo["content"]) == 1 then
-				entranceNumber = entranceNumber + 1;
-			end
-			if tonumber(tabInfo["redpoint"]) == 1 then
-				redpointNumber = redpointNumber + 1;
-			end
+---- 落地页协议处理
+function mt:HandleAllTotalActionProtocolInfo(actDataList)
+	local moduleKey = actDataList["module"]
+	actModuleDataList[moduleKey]["tabInfoList"] = actDataList
+
+	for moduleKey, v in pairs(actModuleDataList) do
+		
+	end
+
+	local entranceNumber = 0
+	local redpointNumber = 0
+	for index, actData in pairs(actDataList) do
+		if tonumber(actData["content"]) == 1 then
+			entranceNumber = entranceNumber + 1
+		end
+		if tonumber(actData["redpoint"]) == 1 then
+			redpointNumber = redpointNumber + 1
 		end
 	end
 	MatrixSettings.HandleShowEntrance(entranceNumber);
 	MatrixSettings.HandleShowRedpoint(redpointNumber);
 end
 
+
 -- 数据结构
 local actionInformation = {
 	{
 		module = "",
-		redpoint = "",
 		moduleTitle = "",
+		redpoint = "",
 		tabInfoList = {
 			{
 				type = "",
