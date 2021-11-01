@@ -1,0 +1,81 @@
+
+local data = {
+    type = "",
+    content = "",
+    module = "",
+    tab = "",
+    tag = "",
+    sortId = "",
+    showName = "",
+    targetUrl = "",
+    countdown = "",
+}
+
+local actionInfoList = {
+    -- module
+    pandoraTab = {
+        -- tab
+        luckyStar = {
+            entrance = {
+                type = "",
+                content = "",
+                module = "",
+                tab = "",
+                tag = "",
+                sortId = "",
+                showName = "",
+                targetUrl = "",
+                countdown = "",
+            },
+            redpoint = {
+                type = "",
+                content = "",
+                module = "",
+                tab = "",
+            }
+        }
+    }
+}
+
+
+local tabInformationList = {
+    ["1"] = {
+        type = "",
+        content = "",
+        module = "",
+        tab = "",
+        tag = "",
+        sortId = "",
+        showName = "",
+        targetUrl = "",
+        countdown = "",
+        redpoint = "",
+    }
+}
+
+local actionInformation = {
+    ["1"] = "pandoraTab",
+    ["pandoraTab"] = {
+        module = "",
+		moduleTitle = "",
+		redpoint = "",
+		tabInfoList = {
+			{
+				type = "",
+				content = "",
+				module = "",
+				tab = "",
+				tag = "",
+				sortId = "",
+				showName = "",
+				targetUrl = "",
+				countdown = "",
+				redpoint = "",
+			},
+			{
+
+			},
+			...
+		}
+    }
+}

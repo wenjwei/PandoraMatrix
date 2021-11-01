@@ -1,2 +1,46 @@
-local PandoraMatrix = require "PandoraMatrixCtrl";
-PandoraMatrix:New():Init();
+
+local WINDOWS_EDITOR = 7
+if UnityEngine.Application.platform == WINDOWS_EDITOR then
+  require "./PandoraMatrixMonitor"
+end
+
+require "PandoraMatrixsManager"
+
+local tbCmd = {}
+tbCmd.type = "pandoraShowMatrix"
+tbCmd.content = "1"
+tbCmd.module = "pandoraTab"
+tbCmd.tab = "luckyStar"
+tbCmd.tag = ""
+tbCmd.sortId = "0"
+tbCmd.showName = "幸运星"
+tbCmd.targetUrl = "0"
+PandoraMatrixManager.pandoraShowMatrix(tbCmd)
+
+local tbCmd2 = {}
+tbCmd2.type = "pandoraRedpointMatrix"
+tbCmd2.content = "1"
+tbCmd2.module = "pandoraTab"
+tbCmd2.tab = "luckyStar"
+PandoraMatrixManager.pandoraRedpointMatrix(tbCmd2)
+
+local PandoraMatrix = require "./PandoraMatrixCtrl"
+PandoraMatrix:New():Init()
+
+local tbCmd3 = {}
+tbCmd3.type = "pandoraShowMatrix"
+tbCmd3.content = "1"
+tbCmd3.module = "pandoraTab"
+tbCmd3.tab = "lucky"
+tbCmd3.tag = ""
+tbCmd3.sortId = "0"
+tbCmd3.showName = "幸运"
+tbCmd3.targetUrl = "http://down.pandora.qq.com/images/wly2/20211101192702/3D47F955C51DF4F1C034D3B401415129_1635766022.png"
+PandoraMatrixManager.pandoraShowMatrix(tbCmd3)
+
+local tbCmd4 = {}
+tbCmd4.type = "pandoraRedpointMatrix"
+tbCmd4.content = "1"
+tbCmd4.module = "pandoraTab"
+tbCmd4.tab = "lucky"
+PandoraMatrixManager.pandoraRedpointMatrix(tbCmd4)

@@ -1,54 +1,54 @@
 
-local mt = {};
+local mt = {}
 local path = "Scroll View/Viewport/Content"
 
 function mt:New()
-	local o = {};
-	setmetatable(o, self);
-	self.__index = self;
-	return o;
+	local o = {}
+	setmetatable(o, self)
+	self.__index = self
+	return o
 end
 
 function mt:Init(gameObject)
-	self.gameObject = gameObject;
-	self.transform = self.gameObject.transform;
+	self.gameObject = gameObject
+	self.transform = self.gameObject.transform
 
-	self.InnerNode = self.transform:Find("Matrix_Main/Parent_inner").gameObject;
-	self.OuterNode = self.transform:Find("Matrix_Main/Parent_outer").gameObject;
-	self.ImageMain = self.transform:Find("Matrix_Main/Image_holder").gameObject;
-	self.ButtonJump  = self.transform:Find("Matrix_Main/Image_holder").gameObject;
-	self.ButtonClose = self.transform:Find("Matrix_Back/Button_close").gameObject;
+	self.InnerNode = self.transform:Find("Matrix_Main/Parent_inner").gameObject
+	self.OuterNode = self.transform:Find("Matrix_Main/Parent_outer").gameObject
+	self.ImageMain = self.transform:Find("Matrix_Main/Image_holder").gameObject
+	self.ButtonJump  = self.transform:Find("Matrix_Main/Image_holder").gameObject
+	self.ButtonClose = self.transform:Find("Matrix_Back/Button_close").gameObject
 	
-	self.TabPanel = self.transform:Find("Matrix_Tab").gameObject;
-	self.TabParent = self.TabPanel.transform:Find(path).gameObject;
-	self.TabObject = self.TabParent.transform:Find("Template").gameObject;
+	self.TabPanel = self.transform:Find("Matrix_Tab").gameObject
+	self.TabParent = self.TabPanel.transform:Find(path).gameObject
+	self.TabObject = self.TabParent.transform:Find("Template").gameObject
 	
-	self.ModulePanel = self.transform:Find("Matrix_Module").gameObject;
-	self.ModuleParent = self.ModulePanel.transform:Find(path).gameObject;
-	self.ModuleObject = self.ModuleParent.transform:Find("Template").gameObject;
+	self.ModulePanel = self.transform:Find("Matrix_Module").gameObject
+	self.ModuleParent = self.ModulePanel.transform:Find(path).gameObject
+	self.ModuleObject = self.ModuleParent.transform:Find("Template").gameObject
 
-	self.ImageMain:SetActive(false);
-	self.TabObject:SetActive(false);
-	self.ModuleObject:SetActive(false);
+	self.ImageMain:SetActive(false)
+	self.TabObject:SetActive(false)
+	self.ModuleObject:SetActive(false)
 end
 
 function mt:Dispose()
-	self.gameObject = nil;
-	self.transform = nil;
+	self.gameObject = nil
+	self.transform = nil
 
-	self.InnerNode = nil;
-	self.OuterNode = nil;
-	self.ImageMain = nil;
-	self.ButtonJump  = nil;
-	self.ButtonClose = nil;
+	self.InnerNode = nil
+	self.OuterNode = nil
+	self.ImageMain = nil
+	self.ButtonJump  = nil
+	self.ButtonClose = nil
 
-	self.TabPanel = nil;
-	self.TabParent = nil;
-	self.TabObject = nil;
+	self.TabPanel = nil
+	self.TabParent = nil
+	self.TabObject = nil
 
-	self.ModulePanel = nil;
-	self.ModuleParent = nil;
-	self.ModuleObject = nil;
+	self.ModulePanel = nil
+	self.ModuleParent = nil
+	self.ModuleObject = nil
 end
 
 return mt

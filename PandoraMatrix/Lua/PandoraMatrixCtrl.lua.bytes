@@ -1,27 +1,22 @@
-require "Common";
-require "JsonManager";
-require "EventDispatcher";
-require "PandoraMatrixManager";
+require "Common"
+require "JsonManager"
+require "EventDispatcher"
+require "PandoraMatrixsManager"
 
-local MatrixPanel = require "PandoraMatrixPanel";
-local MatrixSettings = require "PandoraMatrixSettings";
+local MatrixPanel = require "./PandoraMatrixPanel"
+local MatrixSettings = require "./PandoraMatrixSettings"
 
-local mt = {};
-local hidePanel = false;
-local Logger = Common.GetLogger();
-local MatrixName = MatrixSettings.MatrixName;
-local MatrixUIType = MatrixSettings.GetUIType();
+local mt = {}
+local actionInformation = {}
+local actionInfoList = {}
+local actionModuleInfoList = {}
+
+local Logger = Common.GetLogger()
+local MatrixUIType = MatrixSettings.GetUIType()
 local tabTagList = MatrixSettings.GetActTabTagSettings()
-local moduleSettings = MatrixSettings.GetModuleSettings();
+local moduleSettings = MatrixSettings.GetModuleSettings()
 
-
---[[ local showTitle = "潘多拉落地页";
-local moduleSettings = MatrixSettings.GetModuleSettings();
-for index, moduleValua in pairs(moduleSettings) do
-	if moduleValua.module == tostring(tabActionInfoList[1].module) then
-		showTitle = moduleValua.title;
-	end
-end ]]
+local MatrixName = MatrixSettings.MatrixName
 
 function mt:New()
 	local o = {}
@@ -58,8 +53,8 @@ function mt:InitActionInformation()
 		newModuleInfo["moduleTitle"] = moduleSettings[i]["title"]
 		newModuleInfo["redpoint"] = 0
 		newModuleInfo["tabInfoList"] = {}
-		actModuleDataList[i] = newModuleInfo["module"]
-		actModuleDataList[newModuleInfo["module"]] = newModuleInfo
+		actionModuleInfoList[i] = newModuleInfo["module"]
+		actionModuleInfoList[newModuleInfo["module"]] = newModuleInfo
 	end
 end
 
@@ -107,7 +102,7 @@ function mt:OnHandleShowMatrix(data)
 	end
 	actionInfoList[moduleKey][tabKey]["entrance"] = data
 
-	self:RefreshActEntranceInfo(actionInfoList[moduleKey][tabKey])
+	--self:RefreshActEntranceInfo(actionInfoList[moduleKey][tabKey])
 	self:RefreshMatrixActionInfo(actionInfoList[moduleKey])
 end
 
@@ -139,12 +134,14 @@ function mt:OnHandleRedpointMatrix(data)
 	end
 	actionInfoList[moduleKey][tabKey]["redpoint"] = data
 
-	self:RefreshActRedpointInfo(actionInfoList[moduleKey][tabKey])
+	--self:RefreshActRedpointInfo(actionInfoList[moduleKey][tabKey])
 	self:RefreshMatrixActionInfo(actionInfoList[moduleKey])
 end
 
 function mt:RefreshActRedpointInfo(actData)
-
+	if not self.panel or not self.panel.gameObject then
+		return
+	end
 end
 
 ---- 更新落地页数据
@@ -177,59 +174,34 @@ function mt:RefreshMatrixActionInfo(actDataList)
 end
 
 ---- 落地页协议处理
-function mt:HandleAllTotalActionProtocolInfo(actDataList)
-	local moduleKey = actDataList["module"]
-	actModuleDataList[moduleKey]["tabInfoList"] = actDataList
-
-	for moduleKey, v in pairs(actModuleDataList) do
-		
+function mt:HandleAllTotalActionProtocolInfo(tabInformationList)
+	local moduleValue = tabInformationList[1]["module"]
+	if not actionModuleInfoList[moduleValue] then
+		self:LogInfo("warn: the module not exist: " .. moduleValue)
+		return
 	end
 
-	local entranceNumber = 0
-	local redpointNumber = 0
-	for index, actData in pairs(actDataList) do
-		if tonumber(actData["content"]) == 1 then
-			entranceNumber = entranceNumber + 1
-		end
-		if tonumber(actData["redpoint"]) == 1 then
-			redpointNumber = redpointNumber + 1
+	local redpointNumb = 0
+	for index, tabInformation in ipairs(tabInformationList) do
+		if tonumber(tabInformation["redpoint"]) == 1 then
+			redpointNumb = redpointNumb + 1
 		end
 	end
-	MatrixSettings.HandleShowEntrance(entranceNumber);
-	MatrixSettings.HandleShowRedpoint(redpointNumber);
+
+	local entranceCount = 0
+	local redpointCount = 0
+	for index, stringValue in ipairs(actionModuleInfoList) do
+		if stringValue == moduleValue then
+			actionModuleInfoList[stringValue]["redpoint"] = redpointNumb
+			actionModuleInfoList[stringValue]["tabInfoList"] = tabInformationList
+		end
+		redpointCount = redpointCount + actionModuleInfoList[stringValue]["redpoint"]
+		entranceCount = entranceCount + #actionModuleInfoList[stringValue]["tabInfoList"]
+	end
+
+	MatrixSettings.HandleShowEntrance(entranceCount)
+	MatrixSettings.HandleShowRedpoint(redpointCount)
 end
-
-
--- 数据结构
-local actionInformation = {
-	{
-		module = "",
-		moduleTitle = "",
-		redpoint = "",
-		tabInfoList = {
-			{
-				type = "",
-				content = "",
-				module = "",
-				tab = "",
-				tag = "",
-				sortId = "",
-				showName = "",
-				targetUrl = "",
-				countdown = "",
-				redpoint = "",
-			},
-			{
-
-			},
-			...
-		}
-	},
-	{
-
-	}, 
-	...
-}
 
 
 ------------------------------------------------------------------------
@@ -243,20 +215,20 @@ function mt:OnGameCommand(cmdJson)
 	end
 
 	local typeCmd = MatrixSettings.ParserGameCmd(tbParam)
-	if typeCmd == MatrixSettings.OpenCmd then
+	if typeCmd == "open" then
 		self:OpenActionPanel()
 	end
-	if typeCmd == MatrixSettings.HideCmd then
+	if typeCmd == "hide" then
 		self:HideActionPanel()
 	end
-	if typeCmd == MatrixSettings.CloseCmd then
+	if typeCmd == "clsoe" then
 		self:CloseActionPanel()
 	end
 end
 
 ---- 落地页打开
 function mt:OpenActionPanel()
-	if not self.canOpenMatrix then
+	if not self:CheckActionInfo() then
 		self:LogInfo("error: actionInformation is nil", true)
 		return
 	end
@@ -267,6 +239,17 @@ function mt:OpenActionPanel()
 	else
 		MatrixSettings.ShowLoadingPanel()
 		Common.CreatePanel(MatrixName, self.OnCreated, self)
+	end
+end
+
+function mt:CheckActionInfo( )
+	for index, stringValue in ipairs(actionModuleInfoList) do
+		actionInformation[index] = actionModuleInfoList[stringValue]
+	end
+	if #actionInformation < 1 then
+		return false
+	else
+		return true
 	end
 end
 
@@ -285,22 +268,21 @@ function mt:OnCreated(gamePanel)
 end
 
 function mt:InitUIPanel(refresh)
+	local curTabInfoList = actionInformation[1]["tabInfoList"]
 	if not self.isMultModule then
-		local curTabInfoList = actionInformation[1]["tabInfoList"]
 		local curTabInfo = curTabInfoList[1]
 		self:HandleMatrixRefreshActionObj(curTabInfo)
 
-		local curTab = curTabInfoList[1]["tag"]
+		local curTab = curTabInfo["tab"]
 		self:HandleActionTabObject(curTabInfoList, curTab)
 	else
-		local curTabInfoList = actionInformation[1]["tabInfoList"]
 		local curTabInfo = curTabInfoList[1]
 		self:HandleMatrixRefreshActionObj(curTabInfo)
 
-		local curTab = curTabInfoList[1]["tag"]
+		local curTab = curTabInfo["tab"]
 		self:HandleActionTabObject(curTabInfoList, curTab)
 
-		local curModule = actionInformation[1]["module"]
+		local curModule = curTabInfo["module"]
 		self:HandleActionModuleObject(actionInformation, curModule)
 	end
 
@@ -367,7 +349,8 @@ function mt:HandleActionModuleObject(actModuleInfoList, moduleName)
 				self.moduleObjList[index]:SetActive(true)
 			end
 		end
-	else
+	end
+	if #self.moduleObjList > #actModuleInfoList then
 		for index, actModuleObj in pairs(self.moduleObjList) do
 			if actModuleInfoList[index] then
 				self.moduleObjList[index]:SetActive(true)
@@ -376,7 +359,7 @@ function mt:HandleActionModuleObject(actModuleInfoList, moduleName)
 			end
 		end
 	end
-	self:HandleActionModuleList(actModuleInfoList, moduleName, true);
+	self:HandleActionModuleList(actModuleInfoList, moduleName, true)
 end
 
 ---- 模块数据处理
@@ -429,12 +412,13 @@ function mt:HandleActionTabObject(actTabInfoList, tabName)
 			else
 				local childObj = self.panel.TabObject
 				local parentObj = self.panel.TabParent
-				local newTabObj = Common.CloneAndAddToParent(childObj, tabName, parentObj)
+				local newTabObj = Common.CloneAndAddToParent(childObj, "newTabObj", parentObj)
 				self.tabObjList[index] = newTabObj
 				self.tabObjList[index]:SetActive(true)
 			end
 		end
-	else
+	end
+	if #self.tabObjList > #actTabInfoList then
 		for index, actTabObj in pairs(self.tabObjList) do
 			if actTabInfoList[index] then
 				self.tabObjList[index]:SetActive(true)
@@ -468,6 +452,9 @@ function mt:HandleActionTabList(actTabInfoList, tabName, refresh)
 			self.tabObjList[index].transform:Find("Redpoint").gameObject:SetActive(false)
 		end
 
+		self:LogInfo("tabName: " .. tabName, true)
+		self:LogInfo("actTabInfo.tab: " .. actTabInfo["tab"], true)
+		
 		local ClickTabObjCallBack = function ( )
 			self:HandleMatrixRefreshActionObj(actTabInfo)
 			self:HandleActionTabList(actTabInfoList, actTabInfo["tab"], false)
@@ -475,15 +462,18 @@ function mt:HandleActionTabList(actTabInfoList, tabName, refresh)
 		self:UIButtonEvent(self.tabObjList[index], ClickTabObjCallBack)
 
 		if not refresh then return end
+
+		self.tabObjList[index].name = actTabInfo["tab"]
 	
-		for index, tagValue in pairs(tabTagList) do
+		--[[ for index, tagValue in pairs(tabTagList) do
 			local tagPath = "Labeltag/Label_" .. index
+			self:LogInfo("tagPath: " .. tagPath, true)
 			if tostring(actTabInfo["tag"]) == tagValue then
 				self.tabObjList[index].transform:Find(tagPath).gameObject:SetActive(true)
 			else
 				self.tabObjList[index].transform:Find(tagPath).gameObject:SetActive(false)
 			end
-		end
+		end ]]
 
 		self:UILabelEvent(self.tabObjList[index].transform:Find("Normal/Text").gameObject, actTabInfo["showName"])
 		self:UILabelEvent(self.tabObjList[index].transform:Find("Current/Text").gameObject, actTabInfo["showName"])
@@ -600,6 +590,14 @@ function mt:GetParentAllNode(node)
 
 	self:LogInfo("node allpath is: " .. tostring(path))
 	return path
+end
+
+---- 设置父节点，放在正确位置
+function mt:SetParentObjNode(childObj, parentPath)
+    local parentObj = UnityEngine.GameObject.Find(parentPath).gameObject
+    if parentObj then
+        Common.SetPanelParent(childObj, parentObj)
+    end
 end
 
 ---- 文本赋值
