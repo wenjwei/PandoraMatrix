@@ -6,7 +6,7 @@ local MatrixSettings = {}
 MatrixSettings.IsSendReadyMsg = false
 MatrixSettings.IsSendRedpointMsg = false
 
-MatrixSettings.ParentPath = ""
+MatrixSettings.ParentPath = nil
 MatrixSettings.MatrixName = "PandoraMatrix"
 
 -- 设置业务使用的UI类型
@@ -108,35 +108,35 @@ function MatrixSettings.ParserGameCmd(tbParam, actInfo)
         MatrixSettings.ParentPath = parentPath
     end
     if cmdContent == MatrixSettings.MatrixName then
-        if cmdType == "open" or cmdType == "openModuleTab" then
+        if cmdType == "open" or cmdType == "openmoduletab" then
             return "open"
         end
-        if cmdType == "hide" or cmdType == "hideModuleTab" then
+        if cmdType == "hide" or cmdType == "hidemoduletab" then
             return "hide"
         end
-        if cmdType == "close" or cmdType == "closeModuleTab" then
+        if cmdType == "close" or cmdType == "closemoduletab" then
             return "close"
         end
     end
     if cmdModule == MatrixSettings.MatrixName then
-        if cmdType == "open" or cmdType == "openModuleTab" then
+        if cmdType == "open" or cmdType == "openmoduletab" then
             return "open"
         end
-        if cmdType == "hide" or cmdType == "hideModuleTab" then
+        if cmdType == "hide" or cmdType == "hidemoduletab" then
             return "hide"
         end
-        if cmdType == "close" or cmdType == "closeModuleTab" then
+        if cmdType == "close" or cmdType == "closemoduletab" then
             return "close"
         end
     end
     if cmdTab == MatrixSettings.MatrixName then
-        if cmdType == "open" or cmdType == "openModuleTab" then
+        if cmdType == "open" or cmdType == "openmoduletab" then
             return "open"
         end
-        if cmdType == "hide" or cmdType == "hideModuleTab" then
+        if cmdType == "hide" or cmdType == "hidemoduletab" then
             return "hide"
         end
-        if cmdType == "close" or cmdType == "closeModuleTab" then
+        if cmdType == "close" or cmdType == "closemoduletab" then
             return "close"
         end
     end

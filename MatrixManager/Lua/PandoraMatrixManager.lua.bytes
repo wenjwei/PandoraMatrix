@@ -1,90 +1,94 @@
-require "Logger";
-require "EventDispatcher";
+require "Logger"
+require "EventDispatcher"
 
-PandoraMatrixManager = {};
-PandoraMatrixManager.data = {};
-PandoraMatrixManager.IsCacheData = true;
+PandoraMatrixManager = {}
+PandoraMatrixManager.data = {}
+PandoraMatrixManager.IsCacheData = true
 
 function PandoraMatrixManager.pandoraShowMatrix(tbParam)
 	if not PandoraMatrixManager.CheckCommonAttribute(tbParam) then
-		PandoraMatrixManager.LogWarnInfoMsg("参数校验错误");
-		return false;
+		PandoraMatrixManager.LogWarnInfoMsg("参数校验错误")
+		return false
 	end
 	if not tbParam.content or not tonumber(tbParam.content) then
-		PandoraMatrixManager.LogWarnInfoMsg("content字段参数错误");
-		return false;
+		PandoraMatrixManager.LogWarnInfoMsg("content字段参数错误")
+		return false
 	end
 	if not tbParam.tag or tostring(tbParam.tag) == "" then
-		tbParam.tag = "测试";
+		tbParam.tag = "测试"
 	end
 	if not tbParam.sortId or not tonumber(tbParam.sortId) then
-		tbParam.sortId = "0";
+		tbParam.sortId = "0"
 	end
 	if not tbParam.showName or tostring(tbParam.showName) == "" then
-		tbParam.showName = "活动测试_" .. tostring(tbParam.tab);
+		tbParam.showName = "活动测试_" .. tostring(tbParam.tab)
 	end
 	if not tbParam.targetUrl or tostring(tbParam.targetUrl) == "" then
-		tbParam.targetUrl = "0";
+		tbParam.targetUrl = "0"
 	end
 	if not tbParam.countdown or not tonumber(tbParam.countdown) then
-		tbParam.countdown = "-1";
+		tbParam.countdown = "-1"
 	end
-	tbParam.type = "pandoraShowMatrix";
-	PandoraMatrixManager.DispatchPandoraMatrixEvent(tbParam);
+	tbParam.type = "pandoraShowMatrix"
+	PandoraMatrixManager.DispatchPandoraMatrixEvent(tbParam)
 end
 
 function PandoraMatrixManager.pandoraRedpointMatrix(tbParam)
 	if not PandoraMatrixManager.CheckCommonAttribute(tbParam) then
-		PandoraMatrixManager.LogWarnInfoMsg("参数校验错误");
-		return false;
+		PandoraMatrixManager.LogWarnInfoMsg("参数校验错误")
+		return false
 	end
 	if not tbParam.content or not tonumber(tbParam.content) then
-		PandoraMatrixManager.LogWarnInfoMsg("content字段参数错误");
-		return false;
+		PandoraMatrixManager.LogWarnInfoMsg("content字段参数错误")
+		return false
 	end
-	tbParam.type = "pandoraRedpointMatrix";
-	PandoraMatrixManager.DispatchPandoraMatrixEvent(tbParam);
+	tbParam.type = "pandoraRedpointMatrix"
+	PandoraMatrixManager.DispatchPandoraMatrixEvent(tbParam)
 end
 
 function PandoraMatrixManager.pandoraCloseMatrix(tbParam)
 	if not PandoraMatrixManager.CheckCommonAttribute(tbParam) then
-		PandoraMatrixManager.LogWarnInfoMsg("参数校验错误");
-		return false;
+		PandoraMatrixManager.LogWarnInfoMsg("参数校验错误")
+		return false
 	end
-	tbParam.type = "pandoraCloseMatrix";
-	PandoraMatrixManager.DispatchPandoraMatrixEvent(tbParam);
+	tbParam.type = "pandoraCloseMatrix"
+	PandoraMatrixManager.DispatchPandoraMatrixEvent(tbParam)
 end
 
 
 function PandoraMatrixManager.LogWarnInfoMsg(msgContent)
-	Logger.WARN("[PandoraMatrixManager]" .. tostring(msgContent));
+	Logger.WARN("[PandoraMatrixManager]" .. tostring(msgContent))
 end
 
 function PandoraMatrixManager.CheckCommonAttribute(tbParam)
 	if not Common.GetFunctionSwitch("PandoraMatrix") then
-		PandoraMatrixManager.LogWarnInfoMsg("潘多拉落地页尚未安排接入");
-		return false;
+		PandoraMatrixManager.LogWarnInfoMsg("潘多拉落地页尚未安排接入")
+		return false
 	end
 	if not tbParam or type(tbParam) ~= "table" then
-		PandoraMatrixManager.LogWarnInfoMsg("tbParam参数类型错误");
-		return false;
+		PandoraMatrixManager.LogWarnInfoMsg("tbParam参数类型错误")
+		return false
 	end
 	if not tbParam.module or tostring(tbParam.module) == "" then
-		PandoraMatrixManager.LogWarnInfoMsg("module字段参数错误");
-		return false;
+		PandoraMatrixManager.LogWarnInfoMsg("module字段参数错误")
+		return false
 	end
 	if not tbParam.tab or tostring(tbParam.tab) == "" then
-		PandoraMatrixManager.LogWarnInfoMsg("tab字段参数错误");
-		return false;
+		PandoraMatrixManager.LogWarnInfoMsg("tab字段参数错误")
+		return false
 	end
-	return true;
+	return true
 end
 
 function PandoraMatrixManager.DispatchPandoraMatrixEvent(tbParam)
+	local jsonParam = JsonManager.EncodeJson(tbParam)
+	PandoraMatrixManager.LogWarnInfoMsg("run tbParam：" .. jsonParam)
+
 	if PandoraMatrixManager.IsCacheData then
-		table.insert(PandoraMatrixManager.data, tbParam);
-		return;
+		table.insert(PandoraMatrixManager.data, tbParam)
+		return
 	end
-	EventDispatcher.DispatchEvent("PandoraMatrixEvent", tbParam);
+	EventDispatcher.DispatchEvent("PandoraMatrixEvent", tbParam)
 end
 
+PandoraMatrixManager.LogWarnInfoMsg("to run PandoraMatrixManager, , ,")

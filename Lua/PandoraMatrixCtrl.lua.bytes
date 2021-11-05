@@ -1,7 +1,7 @@
 require "Common"
 require "JsonManager"
 require "EventDispatcher"
-require "PandoraMatrixsManager"
+require "PandoraMatrixManager"
 
 local MatrixPanel = require "./PandoraMatrixPanel"
 local MatrixSettings = require "./PandoraMatrixSettings"
@@ -10,6 +10,7 @@ local mt = {}
 local actionInformation = {}
 local rawActionInfo = {}
 local actionModuleInfoList = {}
+local currentAction = {}
 
 local Logger = Common.GetLogger()
 local MatrixUIType = MatrixSettings.GetUIType()
@@ -105,12 +106,15 @@ function mt:OnHandleShowMatrix(data)
 	rawActionInfo[moduleKey][tabKey]["entrance"] = data
 
 	self:RefreshActEntranceInfo(moduleKey, tabKey)
-	self:RefreshMatrixActionInfo(rawActionInfo[moduleKey])
+	self:RefreshMatrixActionInfo(rawActionInfo[moduleKey], moduleKey, true)
 end
 
 function mt:RefreshActEntranceInfo(moduleKey, tabKey)
 	local showStatus = rawActionInfo[moduleKey][tabKey]["entrance"]["content"]
 	if tostring(showStatus) ~= "1" then
+		if Common.GetFunctionSwitch(MatrixName .. "_Close") then
+			self:CloseActionPanel()
+		end
 		return
 	end
 
@@ -136,8 +140,8 @@ function mt:OnHandleRedpointMatrix(data)
 	end
 	rawActionInfo[moduleKey][tabKey]["redpoint"] = data
 
-	--self:RefreshActRedpointInfo(moduleKey, tabKey)
-	self:RefreshMatrixActionInfo(rawActionInfo[moduleKey])
+	self:RefreshActRedpointInfo(moduleKey, tabKey)
+	self:RefreshMatrixActionInfo(rawActionInfo[moduleKey], moduleKey, false)
 end
 
 function mt:RefreshActRedpointInfo(moduleKey, tabKey)
@@ -165,7 +169,7 @@ function mt:RefreshActRedpointInfo(moduleKey, tabKey)
 end
 
 ---- 更新落地页数据
-function mt:RefreshMatrixActionInfo(actDataList)
+function mt:RefreshMatrixActionInfo(actDataList, moduleKey, refresh)
 	local tabInformationList = {}
 	for actTab, actData in pairs(actDataList) do
 		local entrance = actData["entrance"]
@@ -189,15 +193,14 @@ function mt:RefreshMatrixActionInfo(actDataList)
 			end
 		end
 		table.sort(tabInformationList, sortFunction)
-		self:HandleAllTotalActionProtocolInfo(tabInformationList)
 	end
+	self:HandleAllTotalActionProtocolInfo(tabInformationList, moduleKey, refresh)
 end
 
 ---- 落地页协议处理
-function mt:HandleAllTotalActionProtocolInfo(tabInformationList)
-	local moduleValue = tabInformationList[1]["module"]
-	if not actionModuleInfoList[moduleValue] then
-		self:LogInfo("warn: the module not exist: " .. moduleValue)
+function mt:HandleAllTotalActionProtocolInfo(tabInformationList, moduleKey, refresh)
+	if not actionModuleInfoList[moduleKey] then
+		self:LogInfo("warn: the module not exist: " .. moduleKey)
 		return
 	end
 
@@ -211,7 +214,7 @@ function mt:HandleAllTotalActionProtocolInfo(tabInformationList)
 	local entranceCount = 0
 	local redpointCount = 0
 	for index, stringValue in ipairs(actionModuleInfoList) do
-		if stringValue == moduleValue then
+		if stringValue == moduleKey then
 			actionModuleInfoList[stringValue]["redpoint"] = redpointNumb
 			actionModuleInfoList[stringValue]["tabInfoList"] = tabInformationList
 		end
@@ -221,6 +224,52 @@ function mt:HandleAllTotalActionProtocolInfo(tabInformationList)
 
 	MatrixSettings.HandleShowEntrance(entranceCount)
 	MatrixSettings.HandleShowRedpoint(redpointCount)
+
+	if not Common.GetFunctionSwitch(MatrixName .. "_Refresh") then
+		return
+	end
+
+	if Common.GetFunctionSwitch(MatrixName .. "_Close") then
+		return
+	end
+
+	if not self.panel or not self.panel.gameObject then
+		return
+	end
+
+	if tonumber(entranceCount) == 0 then
+		self:CloseActionPanel()
+		return
+	end
+
+	if not self:CheckActionInfo() then
+		self:LogInfo("error: actionInformation is nil", true)
+		return
+	end
+
+	if not refresh then
+		return
+	end
+
+	local module1 = currentAction["module"]
+	local tab1 = currentAction["tab"]
+	if rawActionInfo[module1][tab1]["entrance"]["content"] == "0" then
+		self:InitUIPanel()
+	else
+		for i, tbValue in ipairs(actionInformation) do
+			for j, v in ipairs(tbValue["tabInfoList"]) do
+				if v["tab"] == currentAction["tab"] then
+					local curTabInfoList = tbValue["tabInfoList"]
+
+					local curTabInfo = curTabInfoList[j]
+					self:HandleMatrixRefreshActionObj(curTabInfo)
+
+					local curTab = curTabInfo["tab"]
+					self:HandleActionTabObject(curTabInfoList, curTab)
+				end
+			end
+		end
+	end
 end
 
 
@@ -229,7 +278,7 @@ end
 ------------------------------------------------------------------------
 
 function mt:OnGameCommand(cmdJson)
-	self:LogInfo("Game Cmd: " .. tostring(cmdJson))
+	self:LogInfo("Game Cmd: " .. tostring(cmdJson), true)
 
 	local tbParam = JsonManager.DecodeJson(cmdJson)
 	if not tbParam or type(tbParam) ~= "table" then
@@ -288,6 +337,7 @@ function mt:OnCreated(gamePanel)
 	self.panel:Init(gamePanel)
 	self:InitUIPanel(true)
 	self.panel.gameObject:SetActive(true)
+	self:SetParentObjNode(self.panel.gameObject)
 end
 
 function mt:InitUIPanel(refresh)
@@ -521,6 +571,7 @@ end
 function mt:HandleMatrixShowActionObject(actionInfo)
 	self:LogInfo("show action: " .. actionInfo["tab"])
 
+	currentAction = actionInfo
 	if tostring(actionInfo["targetUrl"]) ~= "0" then
 		local CallBack = function ()
 			self.panel.ImageMain:SetActive(true)
@@ -612,10 +663,13 @@ end
 
 ---- 设置父节点，放在正确位置
 function mt:SetParentObjNode(node)
-    local parentObj = UnityEngine.GameObject.Find(MatrixSettings.ParentPath).gameObject
-    if parentObj then
-        Common.SetPanelParent(node, parentObj)
-    end
+	if MatrixSettings.ParentPath then
+		local parentObj = UnityEngine.GameObject.Find(MatrixSettings.ParentPath).gameObject
+		if parentObj then
+			--Common.SetPanelParent(node, parentObj) -- SetParent
+			node.transform:SetParent(parentObj.transform)
+		end
+	end
 end
 
 ---- 文本赋值
