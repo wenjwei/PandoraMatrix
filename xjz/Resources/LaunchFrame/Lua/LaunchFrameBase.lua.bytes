@@ -1,3 +1,0 @@
-require "./LaunchFrame"
-
-Logger.INFO("已进入LaunchFrameBase")

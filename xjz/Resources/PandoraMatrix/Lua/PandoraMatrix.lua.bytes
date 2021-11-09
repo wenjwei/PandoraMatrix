@@ -1,8 +1,0 @@
-
-local WINDOWS_EDITOR = 7
-if UnityEngine.Application.platform == WINDOWS_EDITOR then
-  require "./PandoraMatrixMonitor"
-end
-
-local PandoraMatrix = require "./PandoraMatrixCtrl"
-PandoraMatrix:New():Init()

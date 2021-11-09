@@ -1,7 +1,0 @@
-
-local WINDOWS_EDITOR = 7;
-if UnityEngine.Application.platform == WINDOWS_EDITOR then
-  require "DJCMonitor";
-end
-
-require "DJCFrame"

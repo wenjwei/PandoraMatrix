@@ -1,8 +1,0 @@
-local Conflict = {}
-
-function Conflict.Print()
-    Logger.DEBUG("Conflict.Print");
-end
-
-
-return Conflict
