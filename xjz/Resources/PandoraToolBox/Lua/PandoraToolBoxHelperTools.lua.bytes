@@ -1,0 +1,633 @@
+require "Common";
+require "StringTool";
+require "./PandoraToolBoxReflection";
+require "./PandoraToolBoxSettings";
+
+PandoraToolBoxHelperTools = { };
+
+-- 需要反射获取的内容
+local File;
+local Path;
+local Array;
+local Type;
+local logFolderPath;
+local cookieFolderPath;
+
+local CSharpInterface = com.tencent.pandora.CSharpInterface;
+local panel;
+
+local logInfo = {
+    ["sliceLength"] = 1 * 1024 * 1024,
+    ["checkIntervalTime"] = 500,
+    ["maxSliceUploadFailedTimes"] = 3,
+    ["sliceUploadExpiredTime"] = 10 * 1000,
+    ["totalUploadExpiredTime"] = 10 * 1000,
+    -- 总超时时间
+    ["isUploadStarted"] = false,
+    ["sliceNum"] = 0,
+    ["logContent"] = "",
+    ["cursorPosition"] = 0,
+    ["leftLength"] = 0,
+    ["totalCostTime"] = 0,
+}
+
+local currentLogSliceInfo = {
+    ["isUploading"] = false,
+    ["isUploadSuccess"] = false,
+    ["uploadFailedTimes"] = 0,
+    ["logContent"] = "",
+    ["costTime"] = 0,
+};
+
+function PandoraToolBoxHelperTools.Init(panelGameObject)
+    panel = panelGameObject;
+    File = PandoraToolBoxReflection.GetFileClass();
+end
+
+function PandoraToolBoxHelperTools.ShowCommonTips(tips, isNeedAlwaysDisplay)
+    if isNeedAlwaysDisplay == false then
+        LuaTimer.Add(4000, PandoraToolBoxHelperTools.HideCommonTips);
+    end
+    panel.commonTipsPanel:SetActive(true);
+    panel.commonTips.text = tips;
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        panel.commonTipsScrollView:ResetPosition();
+    end
+end
+
+function PandoraToolBoxHelperTools.HideCommonTips(go)
+    panel.commonTipsPanel:SetActive(false);
+    return false;
+end
+
+-- 调用lua函数,使用全局表，最多支持两层深度的调用，
+function PandoraToolBoxHelperTools.CallLuaFunc(complexName, ...)
+    local splitTable = StringTool.Split(complexName, ".");
+    if #splitTable > 2 then
+        return;
+    end
+
+    local functionTableName;
+    local functionName;
+    if #splitTable == 1 then
+        functionName = splitTable[1];
+        _G[functionName](unpack(arg));
+        return;
+    end
+    if #splitTable == 2 then
+        functionTableName = splitTable[1];
+        functionName = splitTable[2];
+        _G[functionTableName][functionName](unpack(arg));
+        return;
+    end
+end
+
+function PandoraToolBoxHelperTools.CallGame(jsonProtocol)
+    Logger.DEBUG("Pandora->Game:\n" .. jsonProtocol)
+    Common.CallGame(jsonProtocol)
+end
+
+function PandoraToolBoxHelperTools.CallPandora(jsonProtocol)
+    Logger.DEBUG("Game->Pandora:\n" .. jsonProtocol)
+    Common.CommandFromGame(jsonProtocol)
+end
+
+function PandoraToolBoxHelperTools.UploadLocalLog()
+    PandoraToolBoxHelperTools.RevertLocalLogState();
+    local isLogExist, logPath = PandoraToolBoxHelperTools.GetLocalLogPath();
+    if isLogExist == false then
+        PandoraToolBoxHelperTools.ShowCommonTips("本地日志不存在。")
+        return;
+    end
+    logInfo.logContent = File.ReadAllBytes(logPath);
+    logInfo.leftLength = logInfo.logContent.Length;
+    logInfo.cursorPosition = 0
+    logInfo.sliceNum = math.ceil(logInfo.leftLength / logInfo.sliceLength)
+    logInfo.totalUploadExpiredTime = logInfo.sliceNum * logInfo.sliceUploadExpiredTime
+    LuaTimer.Add(0, logInfo.checkIntervalTime, PandoraToolBoxHelperTools.SliceUpload)
+end
+
+function PandoraToolBoxHelperTools.GetLocalLogPath()
+    if logFolderPath == nil then
+        logFolderPath = PandoraToolBoxReflection.GetLogFolderPath();
+    end
+    local logName = "log-" .. os.date("%Y-%m-%d", os.time()) .. ".log";
+
+    if Path == nil then
+        Path = PandoraToolBoxReflection.GetPathClass();
+    end
+
+    local logPath = Path.Combine(logFolderPath, logName);
+
+    if File.Exists(logPath) == false then
+        return false, logPath;
+    end
+    return true, logPath
+end
+
+function PandoraToolBoxHelperTools.SliceUpload()
+    logInfo.totalCostTime = logInfo.totalCostTime + logInfo.checkIntervalTime
+    currentLogSliceInfo.costTime = currentLogSliceInfo.costTime + logInfo.checkIntervalTime
+
+    if logInfo.totalCostTime > logInfo.totalUploadExpiredTime then
+        PandoraToolBoxHelperTools.ShowCommonTips("上传日志超时，请重试")
+        return false;
+    end
+
+    if currentLogSliceInfo.isUploading == true then
+        return true
+    end
+
+    local uploadFailedCondition = currentLogSliceInfo.isUploadSuccess == false and currentLogSliceInfo.isUploading == false and logInfo.isUploadStarted == true
+    local uploadExpiredTimeCondition = logInfo.isUploadStarted == true and currentLogSliceInfo.isUploading == true and currentLogSliceInfo.costTime > logInfo.sliceUploadExpiredTime
+    -- 失败或超时，重传
+    if currentLogSliceInfo.isUploadSuccess == false and currentLogSliceInfo.isUploading == false and logInfo.isUploadStarted == true then
+        Logger.DEBUG("日志上传失败或超时，重新上传。isUploadFailed:" .. tostring(uploadFailedCondition) .. ",isUploadExpiredTime:" .. tostring(uploadExpiredTimeCondition))
+        return PandoraToolBoxHelperTools.LogSliceReupload();
+    end
+
+    -- 开始上传
+    if logInfo.isUploadStarted == false or currentLogSliceInfo.isUploadSuccess == true then
+        return PandoraToolBoxHelperTools.LogSliceStartUpload()
+    end
+
+end
+
+function PandoraToolBoxHelperTools.LogSliceReupload()
+    currentLogSliceInfo.uploadFailedTimes = currentLogSliceInfo.uploadFailedTimes + 1
+    if currentLogSliceInfo.uploadFailedTimes > logInfo.maxSliceUploadFailedTimes then
+        PandoraToolBoxHelperTools.ShowCommonTips("上传失败，请稍后重试")
+        return false;
+    end
+    currentLogSliceInfo.isUploading = true
+    currentLogSliceInfo.isUploadSuccess = false
+    currentLogSliceInfo.costTime = 0
+    PandoraToolBoxHelperTools.ExecuteUploadLog(currentLogSliceInfo.logContent)
+    return true
+end
+
+function PandoraToolBoxHelperTools.LogSliceStartUpload()
+    if logInfo.leftLength <= 0 then
+        PandoraToolBoxHelperTools.ShowCommonTips("日志上传成功")
+        PandoraToolBoxHelperTools.DeleteLocalLog(true)
+        PandoraToolBoxHelperTools.RevertLocalLogState()
+        return false
+    end
+
+    -- 获取内容
+    local targetLogContent = logInfo.logContent
+
+    -- 需要分片
+    if logInfo.sliceNum > 1 then
+        local arrayCapacity = logInfo.sliceLength;
+        if logInfo.leftLength < arrayCapacity then
+            arrayCapacity = logInfo.leftLength
+        end
+
+        if Array == nil then
+            Array = PandoraToolBoxReflection.GetArrayClass();
+        end
+        if Type == nil then
+            Type = PandoraToolBoxReflection.GetTypeClass();
+        end
+
+        local destArray = Array.CreateInstance(Type.GetType("System.Byte"), arrayCapacity);
+        Array.Copy(logInfo.logContent, logInfo.cursorPosition, destArray, 0, arrayCapacity)
+        targetLogContent = destArray
+        logInfo.cursorPosition = logInfo.cursorPosition + arrayCapacity
+        logInfo.leftLength = logInfo.leftLength - arrayCapacity
+    else
+        logInfo.leftLength = 0
+    end
+
+    -- 设置状态
+    logInfo.isUploadStarted = true
+    currentLogSliceInfo.costTime = 0
+    currentLogSliceInfo.isUploading = true
+    currentLogSliceInfo.isUploadSuccess = false;
+    currentLogSliceInfo.logContent = targetLogContent;
+    currentLogSliceInfo.uploadFailedTimes = 0
+    PandoraToolBoxHelperTools.ExecuteUploadLog(targetLogContent)
+    return true
+end
+
+function PandoraToolBoxHelperTools.ExecuteUploadLog(logContent)
+    local url = "https://pdrlog.game.qq.com/?c=PandoraSDKLogUpload&a=batch";
+    local userData = Common.GetUserData();
+    local uploadReqTable = { };
+    uploadReqTable["openid"] = userData.sOpenId
+    uploadReqTable["appid"] = userData.sAppId
+    uploadReqTable["platid"] = userData.sPlatID
+    uploadReqTable["logintype"] = userData.sAcountType
+    uploadReqTable["access"] = userData.sGameName
+    uploadReqTable["accessToken"] = userData.sAccessToken
+
+    local nowKey = PandoraToolBoxReflection.GetStringMd5(os.date("%Y%m%d"));
+    local baseKey = PandoraToolBoxReflection.GetStringSha256Hash(uploadReqTable.logintype .. uploadReqTable.accessToken .. uploadReqTable.appid .. uploadReqTable.openid .. uploadReqTable.access);
+    local sKey = PandoraToolBoxReflection.GetStringSha256Hash(baseKey .. nowKey);
+    uploadReqTable["skey"] = sKey
+    local uploadReqJson = JsonManager.EncodeJson(uploadReqTable);
+    PandoraToolBoxHelperTools.LoadWwwWithBinaryData(url, uploadReqJson, logContent, true, PandoraToolBoxHelperTools.UploadLocalLogCallback)
+end
+
+function PandoraToolBoxHelperTools.LoadWwwWithBinaryData(url, reqParams, binaryData, isPost, callback, ...)
+    local id = Common.GenCallId();
+    EventDispatcher.AddEventListener(id, callback, ...);
+    CSharpInterface.LoadWwwWithBinaryData(url, reqParams, binaryData, isPost, id);
+end
+
+function PandoraToolBoxHelperTools.UploadLocalLogCallback(resp)
+    currentLogSliceInfo.isUploading = false;
+    local result = JsonManager.DecodeJson(resp);
+    if result["RetCode"] ~= "0" then
+        currentLogSliceInfo.isUploadSuccess = false
+        return
+    end
+
+    local innerResp = JsonManager.DecodeJson(result["Resp"]);
+    if tostring(innerResp["ret"]) ~= "0" then
+        currentLogSliceInfo.isUploadSuccess = false
+        return
+    end
+    currentLogSliceInfo.isUploadSuccess = true
+
+end
+
+function PandoraToolBoxHelperTools.RevertLocalLogState()
+    logInfo.isUploadStarted = false;
+    logInfo.logContent = "";
+    logInfo.sliceNum = 0;
+    logInfo.cursorPosition = 0;
+    logInfo.leftLength = 0;
+    logInfo.totalCostTime = 0;
+
+    currentLogSliceInfo.isUploading = false;
+    currentLogSliceInfo.isUploadSuccess = false;
+    currentLogSliceInfo.logContent = "";
+    currentLogSliceInfo.uploadFailedTimes = 0;
+    currentLogSliceInfo.costTime = 0;
+end
+
+function PandoraToolBoxHelperTools.DeleteLocalLog(noTips)
+    local isLogExist, logPath = PandoraToolBoxHelperTools.GetLocalLogPath();
+    if isLogExist == false then
+        return;
+    end
+    File.Delete(logPath)
+    if noTips == true then
+        return;
+    end
+    if File.Exists(logPath) == false then
+        PandoraToolBoxHelperTools.ShowCommonTips("删除本地log成功")
+    else
+        PandoraToolBoxHelperTools.ShowCommonTips("删除本地log失败")
+    end
+end
+
+function PandoraToolBoxHelperTools.DisplayCookies()
+    local isCookieExist, fileInfo = PandoraToolBoxHelperTools.GetLocolCookies()
+    if isCookieExist == false then
+        PandoraToolBoxHelperTools.ShowCommonTips("本地没有cookie")
+        return
+    end
+    -- fileInfo[i]:OpenText():ReadToEnd() 不使用这种方法读取，这种方法打开文件流后不会自动关闭，下次再使用会报sharing voliation
+    local cookieTable = { };
+    local cookieItem;
+    for i = 1, fileInfo.Length, 1 do
+        if string.find(fileInfo[i].Name, ".meta") == nil then
+            cookieItem = string.format("%s\n%s\n%s\n%s\n", string.rep("-", 45), fileInfo[i].Name, string.rep("-", 45), File.ReadAllText(fileInfo[i].FullName));
+            table.insert(cookieTable, cookieItem);
+        end
+    end
+
+    local cookies = table.concat(cookieTable, "\n");
+    PandoraToolBoxHelperTools.ShowCommonTips(cookies, true)
+    isCookieExist = nil
+    fileInfo = nil
+end
+
+function PandoraToolBoxHelperTools.DeleteCookies()
+    local isCookieExist, fileInfo = PandoraToolBoxHelperTools.GetLocolCookies()
+    if isCookieExist == false then
+        PandoraToolBoxHelperTools.ShowCommonTips("本地没有cookie")
+        return
+    end
+
+    for i = 1, fileInfo.Length, 1 do
+        fileInfo[i]:Delete()
+    end
+
+    isCookieExist = nil;
+    fileInfo = nil;
+
+    isCookieExist, fileInfo = PandoraToolBoxHelperTools.GetLocolCookies()
+    if isCookieExist == false then
+        PandoraToolBoxHelperTools.ShowCommonTips("清理本地cookie成功")
+    else
+        PandoraToolBoxHelperTools.ShowCommonTips("清理本地cookie失败")
+    end
+end
+
+function PandoraToolBoxHelperTools.GetLocolCookies()
+    if cookieFolderPath == nil then
+        cookieFolderPath = PandoraToolBoxReflection.GetCookieFolderPath();
+    end
+    local directoryInfo = PandoraToolBoxReflection.GetDirectoryInfo(cookieFolderPath);
+    local fileInfo = directoryInfo:GetFiles();
+    if fileInfo.Length == 0 then
+        return false, fileInfo
+    end
+
+    return true, fileInfo
+end
+
+-- region 供函数和协议添加按钮使用的功能函数
+function PandoraToolBoxHelperTools.UpdateLocalConfig(luaFileName, cookieName)
+    local tableConfigInLuaFile
+    function PandoraToolBoxConfig(configData)
+        tableConfigInLuaFile = configData
+    end
+    dofile(luaFileName)
+    local jsonConfigInCookie = Common.ReadCookie(cookieName)
+    if jsonConfigInCookie == "" then
+        Common.WriteCookie(cookieName, JsonManager.EncodeJson(tableConfigInLuaFile))
+        return
+    end
+
+    local tableConfigInCookie = JsonManager.DecodeJson(jsonConfigInCookie);
+    for outerKey, outerVar in pairs(tableConfigInLuaFile) do
+        for innerKey, innerVar in pairs(outerVar) do
+            if tableConfigInCookie[outerKey][innerKey] == nil or tableConfigInCookie[outerKey][innerKey] ~= innerVar then
+                tableConfigInCookie[outerKey][innerKey] = innerVar
+            end
+        end
+    end
+
+    jsonConfigInCookie = JsonManager.EncodeJson(tableConfigInCookie)
+    Common.WriteCookie(cookieName, jsonConfigInCookie)
+end
+
+function PandoraToolBoxHelperTools.CreateButtonList(tableSettings, contentKey, paramKey, template, parent, mainBtnRespFunc, deleteBtnRespFunc, buttonInfoTable)
+    if tableSettings[contentKey] ~= nil and tableSettings[paramKey] ~= nil then
+        for key, var in pairs(tableSettings[contentKey]) do
+            local defaultParams = tableSettings[paramKey][key]
+            PandoraToolBoxHelperTools.AddButton(key, var, defaultParams, template, parent, mainBtnRespFunc, deleteBtnRespFunc, buttonInfoTable)
+        end
+    end
+end
+
+--[[
+buttonName:按钮名称
+buttonContent：按钮需要绑定的内容
+params：按钮需要绑定的额外参数
+template：模版GameObject
+parent：生成对象的父对象
+mainRespFunc：主按钮需绑定的响应事件
+deleteBtnRespFunc：删除按钮需绑定的响应事件
+buttonInfoTable: 存储按钮信息的表
+]]--
+function PandoraToolBoxHelperTools.AddButton(buttonName, buttonContent, params, template, parent, mainBtnRespFunc, deleteBtnRespFunc, buttonInfoTable)
+    local instance = CSharpInterface.CloneAndAddToParent(template, buttonName, parent);
+    PandoraToolBoxHelperTools.SetButtonProperty(instance, buttonName, template, parent, mainBtnRespFunc, deleteBtnRespFunc);
+    local buttonInfoItem = { }
+    buttonInfoItem["content"] = buttonContent
+    buttonInfoItem["params"] = params
+    buttonInfoTable[instance] = buttonInfoItem
+end
+
+function PandoraToolBoxHelperTools.SetButtonProperty(buttonGameObject, buttonName, template, parent, mainBtnRespFunc, deleteBtnRespFunc)
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.UGUI then
+        PandoraToolBoxHelperTools.SetButtonPropertyUGUI(buttonGameObject, buttonName, template, mainBtnRespFunc, deleteBtnRespFunc);
+        return;
+    end
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        PandoraToolBoxHelperTools.SetButtonPropertyNGUI(buttonGameObject, buttonName, template, parent, mainBtnRespFunc, deleteBtnRespFunc);
+        return;
+    end
+end
+
+function PandoraToolBoxHelperTools.SetButtonPropertyUGUI(buttonGameObject, buttonName, template, mainBtnRespFunc, deleteBtnRespFunc)
+    buttonGameObject:GetComponent("RectTransform").localScale = template.transform.localScale
+    buttonGameObject:SetActive(true)
+    buttonGameObject.transform:Find("Text"):GetComponent("Text").text = buttonName;
+    buttonGameObject:GetComponent("Button").onClick:AddListener( function() mainBtnRespFunc(buttonGameObject) end)
+    local buttonDelete = buttonGameObject.transform:Find("Button_delete").gameObject;
+    buttonDelete:GetComponent("Button").onClick:AddListener( function() deleteBtnRespFunc(buttonDelete) end)
+end
+
+function PandoraToolBoxHelperTools.SetButtonPropertyNGUI(buttonGameObject, buttonName, template, parent, mainBtnRespFunc, deleteBtnRespFunc)
+    buttonGameObject.transform.localScale = template.transform.localScale
+    buttonGameObject:SetActive(true)
+    buttonGameObject.transform:Find("Container/Label"):GetComponent("UILabel").text = buttonName;
+    local buttonDelete = buttonGameObject.transform:Find("Button_delete").gameObject;
+    UIEventListener.Get(buttonGameObject).onClick = mainBtnRespFunc;
+    UIEventListener.Get(buttonDelete).onClick = deleteBtnRespFunc;
+    -- reposition
+    parent:GetComponent("UIGrid"):Reposition();
+end
+
+function PandoraToolBoxHelperTools.SortButton(buttonTable, parent)
+    local gameObjectTable = { };
+    for key, var in pairs(buttonTable) do
+        table.insert(gameObjectTable, key);
+    end
+    table.sort(gameObjectTable, PandoraToolBoxHelperTools.CompareFuncByButtonName)
+
+    for key, var in ipairs(gameObjectTable) do
+        var.transform:SetParent(parent.transform.parent, false)
+    end
+
+    for key, var in ipairs(gameObjectTable) do
+        var.transform:SetParent(parent.transform, false);
+    end
+end
+
+function PandoraToolBoxHelperTools.CompareFuncByButtonName(go1, go2)
+    return go1.name > go2.name
+end
+
+function PandoraToolBoxHelperTools.IsContentValid(content, invalidTips)
+    if content == "" then
+        PandoraToolBoxHelperTools.ShowCommonTips(invalidTips)
+        return false
+    end
+    return true
+end
+
+function PandoraToolBoxHelperTools.IsContentInTable(targetTabel, key, value)
+    for k, v in pairs(targetTabel) do
+        if k == key or v == value then
+            PandoraToolBoxHelperTools.ShowCommonTips(key .. "或" .. value .. "已经添加过了，不能重复添加")
+            return true
+        end
+    end
+    return false
+end
+
+function PandoraToolBoxHelperTools.TrimSpace(s)
+    return(string.match(s, "^%s*(.-)%s*$"))
+end
+
+function PandoraToolBoxHelperTools.Clear()
+    panel = nil;
+end
+
+function PandoraToolBoxHelperTools.ShareStructMessageToWX()
+    Common.ShareStructMessageToWX(
+        "分享",
+        "结构化消息分享到微信",
+        "https://mat1.gtimg.com/pingjs/ext2020/qqindex2018/dist/img/qq_logo_2x.png",
+        "",
+        "",
+        "")
+end
+
+function PandoraToolBoxHelperTools.ShareStructMessageToQQ(isToSession)
+    Common.ShareStructMessageToQQ(
+        "分享",
+        "结构化消息分享到QQ会话",
+        "https://mat1.gtimg.com/pingjs/ext2020/qqindex2018/dist/img/qq_logo_2x.png",
+        "https://www.qq.com/",
+        PandoraToolBoxHelperTools.CheckIsSession(isToSession))
+end
+
+function PandoraToolBoxHelperTools.SharePhotoToWX(isToSession)
+    Common.SharePhotoToWX(
+        panel.transform.gameObject,
+        PandoraToolBoxHelperTools.CheckIsSession(isToSession),
+        "",
+        "",
+        "")
+end
+
+function PandoraToolBoxHelperTools.SharePhotoToQQ(isToSession)
+    Common.SharePhotoToQQ(
+        panel.transform.gameObject,
+        PandoraToolBoxHelperTools.CheckIsSession(isToSession))
+end
+
+function PandoraToolBoxHelperTools.SharePresetPhotoToWX(isToSession)
+    Common.SharePresetPhotoToWX(
+        PandoraToolBoxHelperTools.CheckIsSession(isToSession),
+        "",
+        "",
+        "",
+        "https://mat1.gtimg.com/pingjs/ext2020/qqindex2018/dist/img/qq_logo_2x.png",
+        "",
+        "")
+end
+
+function PandoraToolBoxHelperTools.SharePresetPhotoToQQ(isToSession)
+    Common.SharePresetPhotoToQQ(
+        PandoraToolBoxHelperTools.CheckIsSession(isToSession),
+        "https://mat1.gtimg.com/pingjs/ext2020/qqindex2018/dist/img/qq_logo_2x.png",
+        "",
+        "")
+end
+
+function PandoraToolBoxHelperTools.ShareArkMessageToQQInSilence(isToSession)
+    local userData = Common.GetUserData();
+    Common.ShareArkMessageToQQInSilence(
+        userData.sOpenId,
+        userData.sAccessToken,
+        "9499510321704937086",
+        PandoraToolBoxHelperTools.CheckIsSession(isToSession),
+        "")
+end
+
+function PandoraToolBoxHelperTools.ShareUrlToWX(isToSession)
+    Common.ShareUrlToWX(
+        "分享",
+        "微信链接分享",
+        "https://mat1.gtimg.com/pingjs/ext2020/qqindex2018/dist/img/qq_logo_2x.png",
+        "https://www.qq.com/",
+        "",
+        PandoraToolBoxHelperTools.CheckIsSession(isToSession),
+        "",
+        "")
+end
+
+function PandoraToolBoxHelperTools.CheckIsSession(isToSession)
+    if isToSession == "0" then -- 0 - 会话
+        return true
+    elseif isToSession == "1" then -- 1 - 空间或者朋友圈
+        return false
+    end
+end
+
+function PandoraToolBoxHelperTools.PopOpen(content)
+    local args = {}
+    args.type = "pandoraPop";
+    args.content = content;
+
+    Common.CallGameByTable(args)
+end
+
+function PandoraToolBoxHelperTools.PopClose(content)
+    local args = {}
+    args.type = "pandoraClosed";
+    args.content = content;
+
+    Common.CallGameByTable(args)
+end
+
+function PandoraToolBoxHelperTools.JumpUrl()
+    local args = {}
+    args.type = "pandoraOpenUrl";
+    args.content = "https://www.qq.com/";
+
+    Common.CallGameByTable(args)
+end
+
+function PandoraToolBoxHelperTools.JumpGoSystem(content)
+    local args = {}
+    args.type = "pandoraGoSystem";
+    args.content = content;
+
+    Common.CallGameByTable(args)
+end
+
+function PandoraToolBoxHelperTools.JumpGoPandora(content)
+    local args = {}
+    args.type = "pandoraGoPandora";
+    args.content = content;
+
+    Common.CallGameByTable(args)
+end
+
+function PandoraToolBoxHelperTools.RefreshDiamond()
+    local args = {}
+    args.type = "pandoraRefreshDiamond";
+    args.content = "";
+
+    Common.CallGameByTable(args)
+end
+
+function PandoraToolBoxHelperTools.IsPopPanelAllowed()
+    local args = {}
+    args.type = "pandoraIsPopPanelAllowed";
+    args.content = "";
+    args.activityClassification = "";
+    args.activityId = "";
+
+    Common.CallGameByTable(args)
+end
+
+function PandoraToolBoxHelperTools.ShowLoading()
+    local args = {}
+    args.type = "pandoraShowLoading";
+    args.content = "1";
+    args.info = "加载动画";
+
+    Common.CallGameByTable(args)
+
+    LuaTimer.Add(
+        1000 * 3,
+        function()
+            args.content = "0";
+            Common.CallGameByTable(args)
+        end
+    )
+end
+
+-- endregion

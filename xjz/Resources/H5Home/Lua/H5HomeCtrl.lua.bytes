@@ -1,0 +1,169 @@
+require "Common"
+require "JsonManager"
+require "EventDispatcher"
+require "GameMatrixManager"
+require "PandoraMatrixManager"
+
+local Logger = Common.GetLogger()
+local H5HomeUtil = require "./H5HomeUtil"
+
+local mt = {}
+local ModuleId = "11515"
+local ActStyle = "11864"
+local ChannelId = "11515"
+local ActName = "H5Home"
+
+function mt:New()
+    local o = {}
+    setmetatable(o, self)
+    self.__index = self
+    return o
+end
+
+function mt:Init()
+    if Common.GetTotalSwitch() == false then
+        self:LogInfo("error: 全量活动开关关闭", true)
+        return
+    end
+    if Common.GetFunctionSwitch(ActName) == false then
+        self:LogInfo("error： 活动开关关闭", true)
+        return
+    end
+
+    self.actInfoList = {}
+    self:GetActData()
+    EventDispatcher.AddEventListener(Common.GAME_COMMAND, self.OnGameCommand, self)
+end
+
+function mt:GetActData()
+    local requireJson = H5HomeUtil.GetRequestJson(ActStyle, ChannelId)
+    Common.CallBroker(9000, requireJson, self.OnGetActData, self)
+end
+
+function mt:OnGetActData(response)
+    local data = H5HomeUtil.ParseResponse(response)
+    if not data or type(data) ~= "table" then
+        self:LogInfo("活动数据error", true)
+        return
+    end
+
+    self:LogInfo("拉取活动数据回调: " .. response)
+    for index, actInfo in pairs(data) do
+        local ret = H5HomeUtil.CheckActionInfo(actInfo)
+        if ret then
+            TableTool.Print(ret, "活动数据")
+            self.actInfoList[ret.tabValue] = ret
+        end
+    end
+    for _tabValue, actInfo in pairs(self.actInfoList) do
+        if actInfo.moduleValue == "gameTab" then
+            self:GameMatrixShowEntrance("1", actInfo.tabValue, actInfo.tagValue, actInfo.sortIdValue, actInfo.showNameValue, actInfo.targetUrlValue, actInfo.countdownValue)
+            self:GameMatrixShowRedpoint(actInfo.redpointValue, actInfo.tabValue)
+        end
+        if actInfo.moduleValue == "pandoraTab" then
+            self:PandoraMatrixShowEntrance("1", actInfo.tabValue, actInfo.tagValue, actInfo.sortIdValue, actInfo.showNameValue, actInfo.targetUrlValue, actInfo.countdownValue)
+            self:PandoraMatrixShowRedpoint(actInfo.redpointValue, actInfo.tabValue)
+        end
+    end
+end
+
+function mt:OnGameCommand(jsonStr)
+    local params = JsonManager.DecodeJson(jsonStr)
+    local cmdType = string.lower(tostring(params["type"]))
+    local cmdTab = tostring(params["tab"])
+    if cmdType == "open" and cmdTab and self.actInfoList[cmdTab] then
+        if self.actInfoList[cmdTab]["jumpType"] == "URL" then
+            local cmdTb = {}
+            cmdTb.type = "pandoraOpenUrl"
+            cmdTb.content = self.actInfoList[cmdTab]["jumpValue"]
+            cmdTb.isTemplate = true
+            Common.CallGame(JsonManager.EncodeJson(cmdTb))
+        end
+        if self.actInfoList[cmdTab]["jumpType"] == "GAME" then
+            local cmdTb = {}
+            cmdTb.type = "pandoraGoSystem"
+            cmdTb.content = self.actInfoList[cmdTab]["jumpValue"]
+            cmdTb.isTemplate = true
+            Common.CallGame(JsonManager.EncodeJson(cmdTb))
+        end
+        if self.actInfoList[cmdTab]["jumpType"] == "PANDORA" then
+            --[[ local cmdTb = {}
+            cmdTb.type = "pandoraGoPandora"
+            cmdTb.content = self.actInfoList[cmdTab]["jumpValue"]
+            cmdTb.isTemplate = true
+            Common.CallGame(JsonManager.EncodeJson(cmdTb)) ]]
+            local cmdTb = {}
+            cmdTb.type = "open"
+            cmdTb.content = self.actInfoList[cmdTab]["jumpValue"]
+            cmdTb.parentPath = params["parentPath"]
+            Common.CommandFromGame(JsonManager.EncodeJson(cmdTb))
+        end
+        if self.actInfoList[cmdTab]["moduleValue"] == "gameTab" then
+            self:GameMatrixShowRedpoint("0", self.actInfoList[cmdTab]["tabValue"])
+        end
+        if self.actInfoList[cmdTab]["moduleValue"] == "pandoraTab" then
+            self:PandoraMatrixShowRedpoint("0", self.actInfoList[cmdTab]["tabValue"])
+        end
+    end
+end
+
+------------------------------------------------------------------------------------
+---- 游戏落地页入口
+function mt:GameMatrixShowEntrance(statue, tab, tag, sortId, showName, targetUrl, countdown)
+    local tbParam = {}
+    tbParam.type = "pandoraShowMatrix"
+    tbParam.content = tostring(statue) or "0"
+    tbParam.module = "gameTab"
+    tbParam.tab = tab
+    tbParam.tag = tag
+    tbParam.sortId = sortId
+    tbParam.showName = showName
+    tbParam.targetUrl = targetUrl
+    tbParam.countdown = countdown
+    GameMatrixManager.pandoraShowMatrix(tbParam)
+end
+
+---- 游戏落地页入口小红点
+function mt:GameMatrixShowRedpoint(statue, tab)
+    local tbParam = {}
+    tbParam.type = "pandoraRedpointMatrix"
+    tbParam.content = tostring(statue) or "0"
+    tbParam.module = "gameTab"
+    tbParam.tab = tab
+    GameMatrixManager.pandoraRedpointMatrix(tbParam)
+end
+
+---- 潘多拉落地页入口
+function mt:PandoraMatrixShowEntrance(statue, tab, tag, sortId, showName, targetUrl, countdown)
+    local tbParam = {}
+    tbParam.type = "pandoraShowMatrix"
+    tbParam.content = tostring(statue) or "0"
+    tbParam.module = "pandoraTab"
+    tbParam.tab = tab
+    tbParam.tag = tag
+    tbParam.sortId = sortId
+    tbParam.showName = showName
+    tbParam.targetUrl = targetUrl
+    tbParam.countdown = countdown
+    PandoraMatrixManager.pandoraShowMatrix(tbParam)
+end
+
+---- 潘多拉落地页入口小红点
+function mt:PandoraMatrixShowRedpoint(statue, tab)
+    local tbParam = {}
+    tbParam.type = "pandoraRedpointMatrix"
+    tbParam.content = tostring(statue) or "0"
+    tbParam.module = "pandoraTab"
+    tbParam.tab = tab
+    PandoraMatrixManager.pandoraRedpointMatrix(tbParam)
+end
+
+function mt:LogInfo(msgContent, msgType)
+    if msgType then
+        Logger.WARN("[H5Home]: " .. tostring(msgContent))
+    else
+        Logger.DEBUG("[H5Home]: " .. tostring(msgContent))
+    end
+end
+
+return mt

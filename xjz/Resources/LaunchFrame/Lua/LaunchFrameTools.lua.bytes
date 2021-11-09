@@ -1,0 +1,367 @@
+require "Common"
+require "Logger"
+require "JsonManager"
+require "./LaunchFrameMessager"
+
+LaunchFrameTools = {}
+
+-----------------------------------------------------------------------------------------------------------
+------------------------------------------- 日志及上报等级相关 ---------------------------------------------
+-----------------------------------------------------------------------------------------------------------
+LaunchFrameTools.LogId = 0 -- 日志id
+LaunchFrameTools.LogDefaultLevel = {EMPTY = 1} --日志等级，按不同switchName定义。默认为1
+LaunchFrameTools.DebugRemoteLog = {EMPTY = 0} -- 是否打开北斗，按不同switchName定义。默认为0
+
+
+
+-----------------------------------------------------------------------------------------------------------
+------------------------------------------------ 维护人相关 ------------------------------------------------
+-----------------------------------------------------------------------------------------------------------
+LaunchFrameTools.LaunchFrameCustomer = "请当前模板的面板开发同学确认。"
+LaunchFrameTools.LaunchAdminDeveloper = "如有疑问，请联系灵犀投放部分管理端负责人：zhicao(曹智)排查问题。"
+LaunchFrameTools.LaunchPandoraSdkDeveloper = "如有疑问，请联系以下潘多拉标准协议及落地页的适配人员排查问题：v_wenjwei(魏文杰);v_czijchen(陈紫鹃);;v_xzhiliu(柳学智)v_ayugong(龚宇);v_bbduan(段彬彬);v_rhfeng(冯荣华)。ps：当前业务具体人员，可查询潘多拉管理端“云端配置->sdk信息查询”。如有人员相关疑问或人力协调，可以找pandora_helper;v_jqzhao(赵嘉琦);herdywang(王憧生)处理。"
+LaunchFrameTools.LaunchPandoraTabDeveloper = "如有疑问，请联系v_wenjwei（魏文杰）或其他潘多拉sdk开发同学接入。如有人员相关疑问或人力协调，可以找pandora_helper;v_jqzhao(赵嘉琦);herdywang(王憧生)处理。"
+LaunchFrameTools.LaunchFrameDeveloper = "如有疑问，请联系灵犀投放部分客户端LaunchFrame负责人：v_maofliu(刘茂飞);kennyge(葛腾);jessiezwang(王正)排查问题。"
+LaunchFrameTools.UICommonToolDeveloper = "如有疑问，请联系UI配置化负责人kaidiyang(杨开地)咨询。"
+
+
+
+-----------------------------------------------------------------------------------------------------------
+-------------------------------------------------- 日志相关 ------------------------------------------------
+-----------------------------------------------------------------------------------------------------------
+-- 各种追加颜色的日志（DEBUG-粉色，INFO-蓝色，WARNING-黄色，ERROR-红色。发送协议统一使用绿色）
+-- LogDefaultLevel取值：
+--     打印LaunchFrame所有等级日志（0）
+--     不打印LaunchFrame的debug日志（1）
+--     不打印LaunchFrame的debug和info日志（2）
+--     不打印LaunchFrame的debug、info、warning日志，不推荐（3）
+--     不打印LaunchFrame的所有日志，不推荐（4）
+--     默认为（1）
+function LaunchFrameTools.ColorLogDebug(switchName, str)
+    if LaunchFrameTools.LogDefaultLevel ~= nil and LaunchFrameTools.LogDefaultLevel.switchName ~= nil and LaunchFrameTools.LogDefaultLevel.switchName <= 0 then
+        Logger.DEBUG("<color=#ffc6dd>[LaunchFrameLog][" .. LaunchFrameVersion .. "]" .. str .. "</color>")
+    end
+    if LaunchFrameConfig ~=nil and LaunchFrameConfig[switchName] ~=nil and LaunchFrameConfig[switchName].logKey ~=nil and LaunchFrameConfig[switchName].logValue ~=nil then
+        table.insert(LaunchFrameConfig[switchName].logValue, str)
+    end
+end
+function LaunchFrameTools.ColorLogInfo(switchName, str)
+    if LaunchFrameTools.LogDefaultLevel == nil or LaunchFrameTools.LogDefaultLevel.switchName == nil or (LaunchFrameTools.LogDefaultLevel ~= nil and LaunchFrameTools.LogDefaultLevel.switchName ~= nil and LaunchFrameTools.LogDefaultLevel.switchName <= 1) then
+        Logger.INFO("<color=#00a1ff>[LaunchFrameLog][" .. LaunchFrameVersion .. "]" .. str .. "</color>")
+    end
+    if LaunchFrameConfig ~=nil and LaunchFrameConfig[switchName] ~=nil and LaunchFrameConfig[switchName].logKey ~=nil and LaunchFrameConfig[switchName].logValue ~=nil then
+        table.insert(LaunchFrameConfig[switchName].logValue, str)
+    end
+end
+function LaunchFrameTools.ColorLogWarning(switchName, str)
+    if LaunchFrameTools.LogDefaultLevel == nil or LaunchFrameTools.LogDefaultLevel.switchName == nil or (LaunchFrameTools.LogDefaultLevel ~= nil and LaunchFrameTools.LogDefaultLevel.switchName ~= nil and LaunchFrameTools.LogDefaultLevel.switchName <= 2) then
+        Logger.WARN("<color=#ffff00>[LaunchFrameLog][" .. LaunchFrameVersion .. "]" .. str .. "</color>")
+    end
+    if LaunchFrameConfig ~=nil and LaunchFrameConfig[switchName] ~=nil and LaunchFrameConfig[switchName].logKey ~=nil and LaunchFrameConfig[switchName].logValue ~=nil then
+        table.insert(LaunchFrameConfig[switchName].logValue, str)
+    end
+end
+function LaunchFrameTools.ColorLogError(switchName, str)
+    if LaunchFrameTools.LogDefaultLevel == nil or LaunchFrameTools.LogDefaultLevel.switchName == nil or (LaunchFrameTools.LogDefaultLevel ~= nil and LaunchFrameTools.LogDefaultLevel.switchName ~= nil and LaunchFrameTools.LogDefaultLevel.switchName <= 3) then
+        Logger.ERROR("[LaunchFrameLog][" .. LaunchFrameVersion .. "]" .. str)
+    end
+    if LaunchFrameConfig ~=nil and LaunchFrameConfig[switchName] ~=nil and LaunchFrameConfig[switchName].logKey ~=nil and LaunchFrameConfig[switchName].logValue ~=nil then
+        table.insert(LaunchFrameConfig[switchName].logValue, str)
+    end
+end
+--设置日志等级
+function LaunchFrameTools.setLogLevel(switchName, level)
+    LaunchFrameTools.LogDefaultLevel.switchName = level
+end
+--设置是否打印北斗日志
+function LaunchFrameTools.setDebugRemoteLog(switchName, level)
+    LaunchFrameTools.DebugRemoteLog.switchName = level
+end
+
+
+-----------------------------------------------------------------------------------------------------------
+------------------------------------------程序返回前，处理数据，及上报----------------------------------------
+-----------------------------------------------------------------------------------------------------------
+function LaunchFrameTools.outputJson(switchName, ret, msg)
+    -- https://apps.game.qq.com/daoju/igw/main/?_service=base.http.report&set=7&_biz_code=jxqy&_module=linksee.launchframe.query&_app_id=2005&_err_no=0&_err_info=test12321432143&uin=11112222&uid=0&act_id=123456&act_desc=testasdas&function=init&detail=&serial=ams-test&eventid=dj-test
+    local retJson = {}
+    if ret ~= 0 then
+        ret = ret- 1160000
+    end
+    retJson["ret"] = ret or -1169999
+    retJson["msg"] = msg or "抛异常"
+    if ret ~= 0 then
+        LaunchFrameTools.ColorLogError(switchName, "LaunchFrame已结束执行（失败）。返回错误码：" .. ret .. "。错误信息：" .. msg)
+    else
+        LaunchFrameTools.ColorLogInfo(switchName, "LaunchFrame已结束执行（成功）。返回错误码：" .. ret .. "。错误信息：" .. msg)
+    end
+    local CSharpInterface = com.tencent.pandora.CSharpInterface;
+    local isDebug = CSharpInterface.IsDebug();
+    local case1 = isDebug == true  -- 当前是debug模式
+    local case2 = LaunchFrameTools.DebugRemoteLog ~= nil and LaunchFrameTools.DebugRemoteLog.switchName ~= nil or LaunchFrameTools.DebugRemoteLog.switchName == 1  --用户要求强制打日志
+    local case3 = switchName ~= "EMPTY" -- switchName参数已经取到
+    local case4 = LaunchFrameConfig ~=nil and LaunchFrameConfig[switchName] and LaunchFrameConfig[switchName].logKeyInited == true and LaunchFrameConfig[switchName].logParamsInited == true --actstyle等参数已经取到
+    local canReport = ((case1 or case2) and case3 and case4)
+    if canReport == false then
+        LaunchFrameTools.ColorLogInfo(switchName, "不打印北斗后端上报")
+        return retJson
+    end
+
+    local request = {}
+    local tbHeader = {}
+    local tbBody = {}
+
+    local userData = Common.GetUserData();
+    local infoId = ""
+    local actStyle = ""
+    local channelId = ""
+    local bizCode = ""
+    local linkseeaActionId = ""
+    local linkseeTemplateId = ""
+    local detail = ""
+    local serial = "unknownSwitchName_" .. os.date("%Y%m%d-%H%M%S", os.time())
+    LaunchFrameTools.LogId = LaunchFrameTools.LogId + 1
+    serial = LaunchFrameConfig[switchName].logKey
+    table.insert(LaunchFrameConfig[switchName].logValue, 1, "序号：" .. LaunchFrameTools.LogId)
+    detail = StringTool.UrlEncode(JsonManager.EncodeJson(LaunchFrameConfig[switchName].logValue))
+    infoId = LaunchFrameConfig[switchName].activityId
+    actStyle = LaunchFrameConfig[switchName].actStyle
+    channelId = LaunchFrameConfig[switchName].channelId
+    bizCode = LaunchFrameConfig[switchName].bizCode
+    linkseeaActionId = LaunchFrameConfig[switchName].linkseeaActionId
+    linkseeTemplateId = LaunchFrameConfig[switchName].linkseeTemplateId
+
+
+    tbHeader["seq_id"] = "1"
+    tbHeader["cmd_id"] = "10017"
+    tbHeader["msg_type"] = "1"
+    tbHeader["sdk_version"] = Common.GetSDKVersion()
+    tbHeader["game_app_id"] = userData.sAppId or ""
+    tbHeader["plat_id"] = userData.sPlatID or ""
+    tbHeader["area_id"] = userData.sArea or ""
+    tbHeader["patition_id"] = userData.sPartition or ""
+    tbHeader["open_id"] =  userData.sOpenId or ""
+    tbHeader["role_id"] =  userData.sRoleId or ""
+    tbHeader["access_token"] = userData.sAccessToken or ""
+    tbHeader["acc_type"] = userData.sAcountType or ""
+    tbHeader["timestamp"] = os.time()
+    tbHeader["game_env"]= "0"
+    tbHeader["info_id"] = infoId
+    tbHeader["act_style"] = actStyle
+    tbHeader["channel_id"] = channelId
+
+
+    local tbReportParams = {}
+    tbReportParams["_service"] = "base.http.report"
+    tbReportParams["set"] = "7"
+    tbReportParams["_module"] = "linksee.launchframe.query"
+    tbReportParams["_app_id"] = "2005"
+    tbReportParams["_err_no"] = ret
+    tbReportParams["_err_info"] = msg
+    tbReportParams["uin"] = 0
+    tbReportParams["uid"] = userData.sOpenId
+    tbReportParams["detail"] = detail
+    tbReportParams["serial"] = serial
+    tbReportParams["eventid"] = serial
+    tbReportParams["_biz_code"] = bizCode
+    tbReportParams["act_id"] = linkseeaActionId * 100000 + linkseeTemplateId
+    tbReportParams["act_desc"] = "灵犀活动"
+    tbReportParams["function"] = "outputJson" --- ???换一下
+    local sResult = ""
+    for k, v in pairs(tbReportParams) do
+        if type(v) == "table" then
+            v = JsonManager.EncodeJson(v)
+        end
+        sResult = sResult .. k .. "=" .. v .. "&"
+    end
+
+    tbBody["md5_val"] = tostring(os.time())
+    tbBody["djc_req_json"] = {req = sResult}
+    request["head"] = tbHeader
+    request["body"] = tbBody
+    request = JsonManager.EncodeJson(request)
+    --调用网关上报
+    Common.CallBroker(
+        9000,
+        request,
+        function(sResp)
+            Logger.INFO("=========================上报返回信息：" .. sResp)
+        end
+    )
+    return retJson
+end
+
+-----------------------------------------------------------------------------------------------------------
+------------------------------------------------参数处理--------------------------------------------------
+-----------------------------------------------------------------------------------------------------------
+function LaunchFrameTools.DeepCopy(object)
+    local lookup_table = {}
+    local function _copy(object)
+        if type(object) ~= "table" then
+            return object
+        elseif lookup_table[object] then
+            return lookup_table[object]
+        end
+        local newObject = {}
+        lookup_table[object] = newObject
+        for key, value in pairs(object) do
+            newObject[_copy(key)] = _copy(value)
+        end
+        return setmetatable(newObject, getmetatable(object))
+    end
+    return _copy(object)
+end
+
+function LaunchFrameTools.MergeTable(table1,table2)
+    for k,v in pairs(table2) do  
+        table1[k] = v
+    end
+    return table1
+end
+-----------------------------------------------------------------------------------------------------------
+------------------------------------------游戏协议展示tips（调试用）-----------------------------------------
+-----------------------------------------------------------------------------------------------------------
+function LaunchFrameTools.ShowCommonTips(content)
+
+    local callTable = {
+        type            = 'ShowCommonTips',
+        content         = tostring(content),
+    }
+    Common.TablePrinter(callTable, "<color=#03E721>LaunchFrameTools.ShowCommonTips</color>")
+    LaunchFrameMessager.CallGame(callTable)
+end
+
+
+
+-----------------------------------------------------------------------------------------------------------
+------------------------------------------------时间检查----------------------------------------------------
+-----------------------------------------------------------------------------------------------------------
+function LaunchFrameTools.CheckTime(switchName, ruleTime)
+    local nowTime = os.time()
+    for index, value in ipairs(ruleTime) do
+        if value.dtBegin ~= nil and value.dtEnd ~= nil then            
+            if nowTime >= tonumber(value.dtBegin) and nowTime <= tonumber(value.dtEnd) then
+                return true
+            end
+        end
+        LaunchFrameTools.ColorLogInfo(switchName, "当前时间：" .. os.date("%Y-%m-%d_%H:%M:%S", nowTime) .. "；投放开始时间：" .. os.date("%Y-%m-%d_%H:%M:%S", value.dtBegin) .. "；投放结束时间：" ..  os.date("%Y-%m-%d_%H:%M:%S", value.dtEnd))
+    end
+    LaunchFrameTools.ColorLogWarning(switchName, "未在投放时间段内！！")
+    return false
+end
+
+
+
+-----------------------------------------------------------------------------------------------------------
+-----------------------------------------------cookie相关--------------------------------------------------
+-----------------------------------------------------------------------------------------------------------
+-- cookie 数据示例
+--[[
+    {
+        pop:{
+            maxTotalCount:
+            totalCount:
+            date:
+            maxDailyCount:
+            dailyCount:
+        }
+        mainIcon:{
+            'date':
+        }
+    }
+]]
+-- 获取cookie数据
+-- @param ext扩展名字 一般是活动面板名字(必须有名字)
+function LaunchFrameTools.GetCookieInfo(ext, userData)
+    if ext ==nil then
+         ext=''
+         Logger.WARN("GetCookieInfo:ext=nil")
+     end
+     local cookieName = "LaunchFrame" .. userData.sOpenId .. "_" ..userData.sRoleId .. "_" .. ext .. ".txt"
+     local cookieData = Common.ReadCookie(cookieName)
+     if cookieData == nil or cookieData == '' then return {} end
+     Logger.DEBUG("cookieData=" .. cookieData)
+     return JsonManager.DecodeJson(cookieData)
+ end
+
+ -- 设置cookie
+ -- @param ext扩展名字 一般是活动面板名字
+ -- @param cookieTb table数据格式
+ function LaunchFrameTools.SetCookieInfo(ext, userData, cookieTb)
+     if ext ==nil then
+         ext=''
+         Logger.WARN("SetCookieInfo:ext=nil")
+     end
+     local cookieName = "LaunchFrame" .. userData.sOpenId .. "_" ..userData.sRoleId .. "_" .. ext .. ".txt"
+     Common.WriteCookie(cookieName, JsonManager.EncodeJson(cookieTb))
+ end
+
+
+
+-----------------------------------------------------------------------------------------------------------
+-----------------------------------------------常用工具--------------------------------------------------
+-----------------------------------------------------------------------------------------------------------
+
+-- 时间转时间戳 （年-月-日 时:分:秒）
+-- @param 时间
+-- @param 时间戳(秒)
+function LaunchFrameTools.DateTimeToTimeStamp(sDateTime)
+    local dtArr = StringTool.Split(sDateTime, " ") -- 拆分日期和时间
+    if dtArr == nil or LaunchFrameTools.GetArrLength(dtArr) ~= 2 then
+        return nil;
+    end
+
+    local iconCountDownDate     = dtArr[1];
+    local iconCountDownDateArr  = StringTool.Split(iconCountDownDate, "-");
+    if iconCountDownDateArr == nil or LaunchFrameTools.GetArrLength(iconCountDownDateArr) ~= 3 then
+        return nil;
+    end
+
+    local iconCountDownTime     = dtArr[2];
+    local iconCountDownTimeArr  = StringTool.Split(iconCountDownTime, ":");
+    if iconCountDownTimeArr == nil or LaunchFrameTools.GetArrLength(iconCountDownTimeArr) ~= 3 then
+        return nil;
+    end
+
+    return os.time({
+        year    = tonumber(iconCountDownDateArr[1]),
+        month   = tonumber(iconCountDownDateArr[2]),
+        day     = tonumber(iconCountDownDateArr[3]),
+        hour    = tonumber(iconCountDownTimeArr[1]),
+        min     = tonumber(iconCountDownTimeArr[2]),
+        sec     = tonumber(iconCountDownTimeArr[3]),
+    });
+end
+
+-- 日期转时间戳 （年-月-日）
+-- @param 日期
+-- @param 时间戳(秒)
+function LaunchFrameTools.DateToTimeStamp(sDate)
+    local iconCountDownDateArr = StringTool.Split(sDate, "-");
+    if iconCountDownDateArr == nil or LaunchFrameTools.GetArrLength(iconCountDownDateArr) ~= 3 then
+        return nil;
+    end
+
+    return os.time({
+        year    = tonumber(iconCountDownDateArr[1]),
+        month   = tonumber(iconCountDownDateArr[2]),
+        day     = tonumber(iconCountDownDateArr[3]),
+        hour    = 0,
+        min     = 0,
+        sec     = 0,
+    });
+
+end
+
+-- 获取一维数组长度
+-- @param 一维数组
+-- @param 时间戳(秒)
+function LaunchFrameTools.GetArrLength(arr)
+    local ct = 0;
+    for _, _ in pairs(arr) do
+        ct = ct + 1;
+    end
+    return ct;
+end
+
+

@@ -1,0 +1,127 @@
+require "Common"
+require "JsonManager"
+
+PandoraToolBoxRequestAssembler = { }
+local userData = Common.GetUserData();
+local Logger = Common.GetLogger()
+
+function PandoraToolBoxRequestAssembler.GetDjcRequest(commandId,payType, propId, buyNum, payZone)
+    local head = PandoraToolBoxRequestAssembler.GenerateHead(commandId);
+    local body = PandoraToolBoxRequestAssembler.GenerateDjcRequestBody(payType, propId, buyNum, payZone);
+    return PandoraToolBoxRequestAssembler.GenerateRequest(head, body);
+end
+
+function PandoraToolBoxRequestAssembler.GenerateHead(commandId)
+    local head = { }
+    head["seq_id"] = "1";
+    head["cmd_id"] = tostring(commandId);
+    head["msg_type"] = "1";
+    head["sdk_version"] = userData.sSdkVersion;
+    head["game_app_id"] = userData.sAppId;
+    head["channel_id"] = tostring(PandoraToolBoxSettings.channelId);
+    -- 填infoId只拉取对应的一个活动，不填会拉取channelId和actStyle对应的所有活动
+    if PandoraToolBoxSettings.infoId ~= nil then
+        head["info_id"] = tostring(PandoraToolBoxSettings.infoId);
+    end
+    head["plat_id"] = userData.sPlatID;
+    -- 注意:大区id，正式环境下一般为idip规定的1，2；测试环境下各个游戏差异很大，如果游戏传值不正确，需要转换
+    -- 如果遇到道具城查询不到角色，发货失败问题，要看下这个值传的是否正确。
+    head["area_id"] = PandoraToolBoxRequestAssembler.TransArea();
+    head["patition_id"] = userData.sPartition;
+    head["open_id"] = userData.sOpenId;
+    head["role_id"] = userData.sRoleId;
+    head["act_style"] = tostring(PandoraToolBoxSettings.actStyle);
+    head["timestamp"] = os.time();
+    head["access_token"] = userData.sAccessToken;
+    head["acc_type"] = userData.sAcountType;
+    head["game_env"] = tostring(1);
+    -- 打印Header,以table形式打印，方便核对参数
+    Common.TablePrinter(head, "请求的head")
+    return head;
+end
+
+function PandoraToolBoxRequestAssembler.GenerateDjcRequestBody(payType, propId, buyNum, payZone)
+    local djcReq = { };
+    -- 固定值 标识潘多拉渠道
+    djcReq["_app_id"] = "2005";
+    -- 固定值 标识道聚城调用插件
+    djcReq["_plug_id"] = "7200";
+    -- 业务简称
+    djcReq["_biz_code"] = userData.sGameName;
+    djcReq["_output_fmt"] = "";
+    djcReq["acctype"] = userData.sAcountType;
+    djcReq["openid"] = userData.sOpenId;
+    djcReq["access_token"] = userData.sAccessToken;
+    djcReq["appid"] = userData.sAppId;
+    djcReq["pay_token"] = userData.sPayToken;
+    djcReq["plat"] = userData.sPlatID;
+    djcReq["propid"] = propId;
+    djcReq["buyNum"] = tostring(buyNum);
+    -- 注意:大区id，正式环境下一般为idip规定的微信为1 qq为2；测试环境下各个游戏差异很大，如果游戏传值不正确，需要转换
+    -- 如果遇到道具城查询不到角色，发货失败问题，要看下这个值传的是否正确。
+    djcReq["areaid"] = PandoraToolBoxRequestAssembler.TransArea();
+    -- paytype：支付方式，默认为人民币。类型码：游戏币：1；人民币：2；二级游戏币：3；一级二级混合支付,先扣二级，不足时一级补齐：4；三级游戏币：5
+    djcReq["paytype"] = payType;
+    -- 支付大区，一般情况下为partition，但也可能不同，这要看游戏侧在midas后台配置offerid时，配置的pay_zone规则。
+    djcReq["pay_zone"] = payZone;
+    -- 固定填1即可
+    djcReq["_test"] = "1";
+    djcReq["partition"] = userData.sPartition;
+    djcReq["iActionId"] = PandoraToolBoxSettings.actionId;
+    djcReq["roleid"] = userData.sRoleId;
+    -- 固定值
+    djcReq["_ver"] = "v2";
+    -- 固定值
+    djcReq["_cs"] = "2";
+    -- 固定值
+    djcReq["_open"] = "pandora";
+    -- 在pandora_info字段里，填上活动的模块ID (6)。经分统计需要
+    djcReq["pandora_info"] = "{\"module_id\":\"" .. "6" .. "\"," .. "\"gameappid\":\"" .. userData.sAppId .. "\"}";
+    djcReq["rolename"] = "";
+    djcReq["_jsonp"] = "";
+    djcReq["_retkey"] = "";
+    djcReq["apptype"] = "2";
+    -- 道聚城ios下单所需参数
+    djcReq["productid"] = "203001";
+    djcReq["_t"] = os.time();
+
+    local body = { };
+    body["md5_val"] = tostring(os.time());
+    body["goods_id"] = tostring(propId);
+    body["djc_req_json"] = { ["req"] = PandoraToolBoxRequestAssembler.ConcatHashTable(djcReq, "&") };
+    -- 打印Body,以table形式打印，方便核对参数
+    Common.TablePrinter(body, "请求的body")
+    Common.TablePrinter(djcReq, "发送给djc的参数")
+    return body;
+end
+
+function PandoraToolBoxRequestAssembler.GenerateRequest(head, body)
+    local request = { };
+    request["head"] = head;
+    request["body"] = body;
+    return JsonManager.EncodeJson(request);
+end
+
+function PandoraToolBoxRequestAssembler.ConcatHashTable(tbl, separator)
+    if type(tbl) ~= "table" or separator == nil or type(separator) ~= "string" then
+        return nil;
+    end
+    local result = "";
+    for k, v in pairs(tbl) do
+        result = result .. k .. "=" .. v .. separator;
+    end
+    -- 去除最后一个separator
+    local lastIndex = string.len(result) - string.len(separator);
+    if lastIndex < 1 then
+        return nil;
+    end
+    return string.sub(result, 1, lastIndex);
+end
+
+function PandoraToolBoxRequestAssembler.TransArea()
+    if Common.GetFunctionSwitch("test") == true then
+        -- 如果需要转变area 请修改这里的值
+        -- return "2";
+    end
+    return userData.sArea;
+end

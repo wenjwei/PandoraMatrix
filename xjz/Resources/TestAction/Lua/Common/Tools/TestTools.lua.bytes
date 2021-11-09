@@ -1,0 +1,8 @@
+local Tools = {}
+
+function Tools.Print()
+    Logger.DEBUG("Tools.Print");
+end
+
+
+return Tools

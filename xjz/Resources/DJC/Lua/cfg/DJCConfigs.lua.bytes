@@ -1,0 +1,87 @@
+require "Common"
+local Configs = {
+    ACTIONS = {},--活动实例列表
+    BASE = {
+        CHANNEL_ID            = "", -- 活动频道 channelid，必填
+        ACT_STYLE             = "", -- 活动类型 actstyle，必填
+        DJC_ACT_ID            = "", --道聚城活动id，必填
+        AMSACT_ID             = "", --ams活动id
+        INFO_ID               = "", --潘多拉活动id，必填
+        SERVICE_NAME          = "", -- 业务英文名，必填
+        --框架根据上方参数自动设置
+        MODULE_ID             = "", -- 上报 moduleid，现在默认为 channelid,必填
+        COOKIE_NAME_PRE       = "", -- cookie 名前缀,一般为bizcode_actstyle_channelid
+        --根据业务固定设置
+        UI_TYPE               = "UGUI", -- NGUI, UGUI
+        IS_PAAS               = 1,--是否走paas
+    },
+    -- 各种网络相关的配置
+    NET = {
+        INIT_REQUEST          = "Init",--ams+djc
+        AMS_REQUEST           = "Ams",
+        DJC_REQUEST           = "Djc",
+        DOAMS_REQUEST         = "Doams",
+        ATTEND_REQUEST        = "Attend",
+        BUY_REQUEST           = "Buy",
+    },
+    -- 其他配置
+    OTHER = {
+        DEBUG_PRE             = "<color=#0000ff>[DJC]</color>", -- debug 级别日志标识 & 颜色，可自己修改
+        ERROR_PRE             = "<color=#ff0000>[DJC]</color>", -- error 级别日志表示 & 颜色，可自己修改
+        OPEN_EVENT_NAME       = "DJCOpenEvent", -- 面板打开事件名
+        HIDE_EVENT_NAME       = "DJCHideEvent", -- 面板隐藏事件名
+        CLOSE_EVENT_NAME      = "DJCCloseEvent", -- 面板关闭事件名
+        ATT_EVENT_NAME        = "DJCAttend", -- 参与事件名，其他动作事件参照此命名格式
+        TEST_SWITCH           = false, -- 上线前必须改为false!
+        RMB_PAY_TYPE          = "2", -- 人民币支付类型
+        DB_1_PAY_TYPE         = "1", -- 一级代币支付类型
+        DB_2_PAY_TYPE         = "3", -- 二级代币支付类型
+        DB_1_2_PAY_TYPE       = "4", -- 一二级代币补足混合支付类型
+        DB_1_2_FIXED_PAY_TYPE = "7", -- 一二级代币固定比例混合支付类型
+        DB_3_PAY_TYPE         = "5", -- 三级代币支付类型
+        BUY_LIMIT_CODE        = "-6350", -- 道聚城触发购买限量错误码
+        DB_NOT_ENOUGH_CODE    = "-7213", -- 道聚城代币余额不足错误码
+        REFRUSH_JF            = "refrushjf",--刷新积分
+        CLEAR_MAIL            = "clearmail",--清理邮件积分
+        REFRUSH_REDPOINT      = "refrushredpoint"--刷新红点
+    },
+    -- 各种消息文案配置，如弹窗消息、错误消息等
+    MSG = {
+        REQ_PARAMS_ERROR      = "请求参数错误",
+        TIP_ACT_IS_END        = "抱歉，活动已结束！",
+        SYS_BUSY              = "网络繁忙，请稍后重试~",
+        TIP_CLICKLIMIT        = "您点击的太频繁了哦！",
+        TOTAL_SWITCH_CLOSED   = "全量开关关闭！",
+        ACT_SWITCH_ERROR      = " 活动开关不存在或者关闭",
+        GET_ACT_INFO_ERROR    = "拉取活动数据异常！",
+        ACT_INFO_ERROR        = "非预期的活动数据！",
+        EMPTY_RESP            = "空响应！",
+        ERROR_FORMAT          = "响应格式错误！",
+        ERROR_RET             = "非预期的响应！",
+        OK                    = "ok",
+        ORDER_SUCCESS         = "购买成功！",
+        ORDER_FAIL            = "购买失败！",
+        BUT_LIMIT             = "抱歉，您已经不能再购买该礼包了哦！",
+        DB_NOT_ENOUGH         = "抱歉，您的代币不够哦！",
+        -- ATT_FAILURE           = "参与失败" -- 示例消息，记得删除
+    },
+    -- 判断当前环境
+    GetGameEvn = function()
+        local isTest = Common.GetFunctionSwitch("test")
+
+        if isTest then
+            return -1 -- 正式环境>=0,测试环境<0,做idip、ams、道聚城的动态路由用
+        else
+            return 0
+        end
+    end
+}
+
+function Configs:New(o)
+    o = o or {}
+    setmetatable(o, self)
+    self.__index = self
+    return o
+end
+
+return Configs

@@ -1,0 +1,1360 @@
+
+local WINDOWS_EDITOR = 7;
+if UnityEngine.Application.platform == WINDOWS_EDITOR then
+  require "./LaunchFrameMonitor";
+end
+
+
+local WINDOWS_EDITOR = 7;
+if UnityEngine.Application.platform == WINDOWS_EDITOR then
+  require "./LaunchFrameMonitor";
+end
+
+
+local WINDOWS_EDITOR = 7;
+if UnityEngine.Application.platform == WINDOWS_EDITOR then
+  require "./LaunchFrameMonitor";
+end
+
+--------------------------------这里是投放模块客户端内实现LaunchFrame--------------------------------
+-- 相关接入文档请查询：
+--
+-- 【标准投放协议】https://docs.qq.com/sheet/DWnFubHZ5ZFpIdUtt?tab=6uzci4
+--
+-- 【投放接入规范（For：模板pm）】https://iwiki.woa.com/pages/viewpage.action?pageId=653099065
+-- 【投放接入规范（For：潘多拉sdk开发）】https://iwiki.woa.com/pages/viewpage.action?pageId=659223536
+-- 【新版本投放接入规范（For：投放功能开发者）】https://iwiki.woa.com/pages/viewpage.action?pageId=659226525
+-- 【投放接入规范（投放原理解析）】https://iwiki.woa.com/pages/viewpage.action?pageId=663914190
+-- 【投放接入规范（LaunchFrame测试方式及测试用例）】https://iwiki.woa.com/pages/viewpage.action?pageId=709633453
+---------------------------------------------------------------------------------------------------
+
+
+require "Common"
+require "Logger"
+require "StringTool"
+require "JsonManager"
+require "EventDispatcher"
+
+local Logger = Common.GetLogger()
+local userData = Common.GetUserData()
+LaunchFrame = {}  -- 各函数都注册在当前变量下
+LaunchFrameVersion = "v1.1.4" -- 当前版本号
+LaunchFrameConfig = {} -- 主要配置文件，使用switchName作为唯一key
+
+require "./LaunchFrameTools"
+require "./LaunchFrameMessager"
+
+
+function LaunchFrame.LogInfo()
+    Logger.WARN("start to run launchframe")
+end
+
+
+--------------------------------------------------------------------------------------------------------------
+-----------------------------------------------init方法的参数校验-----------------------------------------------
+--------------------------------------------------错误码：-51XX------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+--基础参数检查
+function LaunchFrame.CheckBasicParams(config)
+    local ret = 0
+    local msg = "ok"
+    local switchName = config.switchName
+    LaunchFrameTools.ColorLogInfo(switchName, "[CheckBasicParams（基础参数校验）]")
+    -- 参数校验（必传）
+    if config.extField == nil then
+        ret = -5104
+        msg = "必传参数：config.extField未传入。".. LaunchFrameTools.LaunchFrameCustomer
+        return {ret = ret, msg = msg}
+    end
+
+    -- 参数校验（可选）
+    if config.countdown == nil then
+        LaunchFrameTools.ColorLogInfo(switchName, "可选参数：config.countdown未传入。默认赋值：-1。")
+    end
+    if config.countdown ~= nil and type(tonumber(config.countdown)) ~= "number" then
+        ret = -5105
+        msg = "可选参数：config.countdown非数字。".. LaunchFrameTools.LaunchFrameCustomer
+        return {ret = ret, msg = msg}
+    end
+    if config.gameTabSortId == nil then
+        LaunchFrameTools.ColorLogInfo(switchName, "可选参数：config.gameTabSortId未传入。默认赋值：0。")
+    end
+    if config.gameTabSortId ~= nil and type(tonumber(config.gameTabSortId)) ~= "number" then
+        ret = -5105
+        msg = "可选参数：config.gameTabSortId非数字。".. LaunchFrameTools.LaunchFrameCustomer
+        return {ret = ret, msg = msg}
+    end
+    if config.pandoraTabSortId == nil then
+        LaunchFrameTools.ColorLogInfo(switchName, "可选参数：config.pandoraTabSortId未传入。默认赋值：0。")
+    end
+    if config.pandoraTabSortId ~= nil and type(tonumber(config.pandoraTabSortId)) ~= "number" then
+        ret = -5105
+        msg = "可选参数：config.pandoraTabSortId非数字。".. LaunchFrameTools.LaunchFrameCustomer
+        return {ret = ret, msg = msg}
+    end
+
+    -- config.switchName深度校验
+    -- 最好直接取UI自定义中打包生成的名字Linksee157Locust_1091894（可选，WARN）
+    local beginPos1, endPos1 = string.find(config.switchName, "Linksee")
+    local beginPos2, endPos2 = string.find(config.switchName, "_"..config.activityId)
+    if beginPos1 ~= 1 or beginPos2 == nil then
+        LaunchFrameTools.ColorLogInfo(switchName, "config.switchName推荐使用UI自定义中打包生成的名字，以免造成多个活动之间处理或监听相同内容的问题（尤其是确认下，本模板如果同时上线多个活动，各个活动这里是否都是唯一的？确认好即可，非强制）。示例：Linksee157Locust_1091894。" .. LaunchFrameTools.UICommonToolDeveloper)
+    end
+
+    -- config.extField深度校验
+    local extField =JsonManager.DecodeJson(config.extField)
+    if extField == nil then
+        ret = -5106
+        msg = "config.extField 非json。".. LaunchFrameTools.LaunchAdminDeveloper
+        return {ret = ret, msg = msg}
+    end
+
+    -- （1）sPubFrom是否为act。不是act表示非投放状态，不再继续往下走
+    if extField.sPubFrom == nil then
+        ret = -5107
+        msg = "config.extField.sPubFrom未设置~" .. LaunchFrameTools.LaunchFrameCustomer .. LaunchFrameTools.LaunchAdminDeveloper
+        return { ret = ret, msg = msg }
+    else
+        local sPubFromJson;
+        if type(extField.sPubFrom) == "table" then
+            sPubFromJson = extField.sPubFrom;
+        else
+            sPubFromJson = JsonManager.DecodeJson(extField.sPubFrom);
+        end
+
+        if sPubFromJson ~= nil then
+            local sPubFromStatus = false;
+            local noChannel = {};
+            for i, v in pairs(sPubFromJson) do
+                if v == 'channel' then
+                    sPubFromStatus = true
+                else
+                    table.insert(noChannel, i);
+                end
+            end
+
+            if sPubFromStatus == false then
+                ret = -5107
+                msg = "config.extField.sPubFrom中" .. table.concat(noChannel, ',') .. "不为channel，说明当前灵犀上的活动并未在“已投放”状态中！！！如果之前投放过了，说明是改了内容或者是发布之后，没有重新投放一下。" .. LaunchFrameTools.LaunchFrameCustomer .. LaunchFrameTools.LaunchAdminDeveloper
+                return { ret = ret, msg = msg }
+            end
+        elseif extField.sPubFrom ~= "channel" then
+            --兼容旧数据
+            ret = -5107
+            msg = "config.extField.sPubFrom不为channel，说明当前灵犀上的活动并未在“已投放”状态中！！！如果之前投放过了，说明是改了内容或者是发布之后，没有重新投放一下。" .. LaunchFrameTools.LaunchFrameCustomer .. LaunchFrameTools.LaunchAdminDeveloper
+            return { ret = ret, msg = msg }
+        end
+    end
+
+    --     -- （1）sPubFrom是否为act。不是act表示非投放状态，不再继续往下走
+    -- if extField.sPubFrom == nil or extField.sPubFrom == nil or extField.sPubFrom ~= "channel" then
+    --     ret = -5107
+    --     msg = "config.extField.sPubFrom不为channel，说明当前灵犀上的活动并未在“已投放”状态中！！！如果之前投放过了，说明是改了内容或者是发布之后，没有重新投放一下。" .. LaunchFrameTools.LaunchFrameCustomer .. LaunchFrameTools.LaunchAdminDeveloper
+    --     return {ret = ret, msg = msg}
+    -- end
+
+    -- （2）linkseeId、bizCode
+    if extField.linkseeId == nil or type(tonumber(extField.linkseeId)) ~= "number" then
+        ret = -5108
+        msg = "config.extField.linkseeId不为数字。".. LaunchFrameTools.LaunchAdminDeveloper
+        return {ret = ret, msg = msg}
+    end
+    if extField.bizCode == nil then
+        ret = -5109
+        msg = "config.extField.bizCode未传入。".. LaunchFrameTools.LaunchAdminDeveloper
+        return {ret = ret, msg = msg}
+    end
+    -- （3）4种投放场景分别的参数校验，在各投放场景的调用中实现，即CheckAdminParamsPop、CheckAdminParamsIcon、CheckAdminParamsPandoraTab、CheckAdminParamsGameTab
+    LaunchFrameTools.ColorLogInfo(switchName, "config.extField基础内容校验通过（4种投放场景分别的参数校验，在CheckAdminParamXXX中实现）")
+    return {ret = ret, msg = msg}
+end
+--上报参数检查
+function LaunchFrame.CheckReportParams(config)
+    local ret = 0
+    local msg = "ok"
+    local switchName = config.switchName
+    LaunchFrameTools.ColorLogInfo(switchName, "[CheckBasicParams（上报参数校验）]")
+    if config.activityId == nil or type(tonumber(config.activityId)) ~= "number" then
+        ret = -5103
+        msg = "上报参数：config.activityId非数字。".. LaunchFrameTools.LaunchFrameCustomer
+        return {ret = ret, msg = msg}
+    end
+    if config.actStyle == nil or type(tonumber(config.actStyle)) ~= "number" then
+        ret = -5110
+        msg = "上报参数：config.actStyle非数字。".. LaunchFrameTools.LaunchFrameCustomer
+        return {ret = ret, msg = msg}
+    end
+    if config.channelId == nil or type(tonumber(config.channelId)) ~= "number" then
+        ret = -5111
+        msg = "上报参数：config.channelId非数字。".. LaunchFrameTools.LaunchFrameCustomer
+        return {ret = ret, msg = msg}
+    end
+    if config.bizCode == nil then
+        ret = -5112
+        msg = "上报参数：config.bizCode未传入。".. LaunchFrameTools.LaunchFrameCustomer
+        return {ret = ret, msg = msg}
+    end
+    if config.linkseeaActionId == nil then
+        ret = -5113
+        msg = "上报参数：config.linkseeaActionId未传入。".. LaunchFrameTools.LaunchFrameCustomer
+        return {ret = ret, msg = msg}
+    end
+    if config.linkseeTemplateId == nil then
+        ret = -5114
+        msg = "上报参数：config.linkseeTemplateId未传入。".. LaunchFrameTools.LaunchFrameCustomer
+        return {ret = ret, msg = msg}
+    end
+    return {ret = ret, msg = msg}
+end
+
+
+--------------------------------------------------------------------------------------------------------------
+-----------------------------------------场景1：登录弹出（拍脸）的相关函数---------------------------------------
+--------------------------------------------------错误码：-1XXX-------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+-- 管理端参数校验
+-- 错误码：-10XX
+function LaunchFrame.CheckAdminParamsPop(switchName, config)
+    local ret = 0
+    local msg = "ok"
+    LaunchFrameTools.ColorLogInfo(switchName, "[CheckAdminParamsPop（检查拍脸参数）]")
+    --     if switchName == nil or LaunchFrameConfig[switchName] ==
+    --     nil or next(LaunchFrameConfig[switchName]) == nil or
+    --     LaunchFrameConfig[switchName].extField == nil or
+    --     next(LaunchFrameConfig[switchName].extField) == nil or
+    --     LaunchFrameConfig[switchName].extField.popPara == nil or
+    --     next(LaunchFrameConfig[switchName].extField.popPara) == nil or
+    --     LaunchFrameConfig[switchName].extField.popPara.popRate == nil then
+    --     LaunchFrameTools.ColorLogInfo(switchName, "CheckPopParam param is false")
+    --     return false
+    -- end
+    -- return true
+    return {ret = ret, msg = msg}
+end
+
+-- 入口添加
+-- 错误码：-11XX
+function LaunchFrame.AddActionPop(switchName)
+    local ret = 0
+    local msg = "ok"
+    local result = {}
+    LaunchFrameTools.ColorLogInfo(switchName, "[AddActionPop（添加拍脸入口）]")
+    --（1）检查当前是否允许拍脸（时间、次数的限制）
+    local popTime = LaunchFrameConfig[switchName].extField.popPara.popTime
+    local maxDailyCount = LaunchFrameConfig[switchName].popConfig.maxDailyCount
+    local popTotalNum = LaunchFrameConfig[switchName].extField.popPara.popTotalNum
+    result = LaunchFrame.TestPopShowCondition(switchName, popTime, maxDailyCount, popTotalNum)
+    if result ~= nil and result['ret'] ~= nil and (result['ret'] == -1201 or result['ret'] == -1203 or result['ret'] == -1204)then
+        ret = 0
+        msg = "当前时间不在拍脸配置的周期内"
+        return {ret = ret, msg = msg}
+    end
+    if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+        return result
+    end
+    --（2）发送入口协议
+    result = LaunchFrameMessager.PopReady(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].popReadyParam)
+    if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+        return result
+    end
+    --（3）更新拍脸次数
+    result = LaunchFrame.RecordUpdate(switchName)
+    if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+        return result
+    end
+    return {ret = ret, msg = msg}
+end
+
+-- 判断当前是否允许拍脸（时间、次数的限制）
+-- 错误码：-12XX
+function LaunchFrame.TestPopShowCondition(switchName, popTime, maxDailyCount, maxTotalCount)
+    local ret = 0
+    local msg = "ok"
+    LaunchFrameTools.ColorLogInfo(switchName, "[TestPopShowCondition（拍脸的时间、次数检查）]")
+    -- 校验投放时间
+    if LaunchFrameTools.CheckTime(switchName, popTime) == false then
+        ret = -1201
+        msg = "当前时间不在拍脸配置的周期内"-- 未在投放时间内，但返回0，继续后面的逻辑
+        return {ret = ret, msg = msg}
+    end
+    -- 校验投放次数（总次数、每天次数）
+    LaunchFrameConfig[switchName].popConfig.popRate = LaunchFrameConfig[switchName].extField.popPara.popRate
+    local popRate = LaunchFrameConfig[switchName].popConfig.popRate
+    if popRate == nil then
+        ret = -1202
+        msg = "popConfig.popRate不存在"
+        return {ret = ret, msg = msg}
+    end
+    local popList = StringTool.Split(popRate, '_')
+    if tonumber(popList[1]) == 1 then
+        LaunchFrameTools.ColorLogInfo(switchName, "弹出类型为每次都弹")
+        return {ret = ret, msg = msg}
+    end
+    LaunchFrameTools.ColorLogInfo(switchName, "弹出类型为判断总次数、每天次数上限")
+    if popList[2] ~= nil then maxDailyCount = popList[2] end
+    local record = LaunchFrameConfig[switchName].cookieData.pop
+    local dateStr = os.date("%Y-%m-%d")
+    if record == nil or next(record) == nil then -- 尚未存在记录的情况下，先增加一条记录
+        LaunchFrameConfig[switchName].cookieData.pop =
+        {
+            ["maxTotalCount"] = maxTotalCount,      -- 总的最大次数
+            ["totalCount"] = 0,                     -- 总的次数
+            ["date"] = dateStr,                     -- 日期
+            ["maxDailyCount"] = maxDailyCount,      -- 每日最大
+            ["dailyCount"] = 0                      -- 已经拍脸次数
+        }
+        return {ret = ret, msg = msg}
+    end
+    local entry = record -- 读取已有的记录
+    entry["maxTotalCount"] = maxTotalCount
+    entry["maxDailyCount"] = maxDailyCount
+    if tonumber(entry["totalCount"]) >= tonumber(entry["maxTotalCount"]) then -- 最大超了
+        ret = -1203 -- 超过总次数，但需要最终返回0，继续后面的逻辑
+        msg = "当前总弹出次数已超过上限：" .. entry["maxTotalCount"]
+        return {ret = ret, msg = msg}
+    end
+    if entry["date"] == dateStr then -- 当日重复展示
+        if tonumber(entry["dailyCount"]) >= tonumber(entry["maxDailyCount"]) then
+            ret = -1204 -- 超过每日次数，但需要最终返回0，继续后面的逻辑
+            msg = "当前每日弹出次数已超过上限：" .. entry["maxDailyCount"]
+            return {ret = ret, msg = msg}
+        end
+        return {ret = ret, msg = msg}
+    end
+    entry["date"] = dateStr -- 不同日期展示
+    entry["dailyCount"] = 0
+    LaunchFrameConfig[switchName].cookieData.pop = entry
+    return {ret = ret, msg = msg}
+end
+
+-- 更新拍脸记录
+-- 错误码：-13XX
+function LaunchFrame.RecordUpdate(switchName)
+    local ret = 0
+    local msg = "ok"
+    LaunchFrameTools.ColorLogInfo(switchName, "[RecordUpdate（更新拍脸记录）]")
+    local popList = StringTool.Split(LaunchFrameConfig[switchName].popConfig.popRate, '_')
+    if tonumber(popList[1]) == 1 then
+        return {ret = ret, msg = msg}
+    end
+    local entry = LaunchFrameConfig[switchName].cookieData.pop
+    entry["totalCount"] = tonumber(entry["totalCount"]) + 1
+    entry["dailyCount"] = tonumber(entry["dailyCount"]) + 1
+    LaunchFrameTools.SetCookieInfo(switchName, userData, LaunchFrameConfig[switchName].cookieData)
+    return {ret = ret, msg = msg}
+end
+
+
+
+
+
+--------------------------------------------------------------------------------------------------------------
+-----------------------------------------------场景2：icon的相关函数-------------------------------------------
+--------------------------------------------------错误码：-2XXX-------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+-- 管理端参数校验
+-- 错误码：-20XX
+function LaunchFrame.CheckAdminParamsIcon(switchName, config)
+    local ret = 0
+    local msg = "ok"
+    LaunchFrameTools.ColorLogInfo(switchName, "[CheckAdminParamsIcon（检查icon参数）]")
+    return {ret = ret, msg = msg}
+end
+
+-- 入口添加
+-- 错误码：-21XX
+function LaunchFrame.AddActionIcon(switchName)
+    local ret = 0
+    local msg = "ok"
+    local result = {}
+    LaunchFrameTools.ColorLogInfo(switchName, "[AddActionIcon（添加icon入口）]")
+    -- （1）检查当前是否允许弹出icon（时间限制）
+    local uniqueNameIcon = LaunchFrameConfig[switchName].uniqueNameIcon -- 红点次数的key
+    local iconTime = LaunchFrameConfig[switchName].extField.iconPara.iconTime
+    if LaunchFrameTools.CheckTime(switchName,iconTime) == false then
+        LaunchFrameConfig[uniqueNameIcon] = nil
+        ret = 0
+        msg = "当前时间不在icon配置的周期内"
+        return {ret = ret, msg = msg} -- 未在投放时间内，但返回0，继续后面的逻辑
+    end
+    --（2）发送入口协议
+    result = LaunchFrameMessager.IconReady(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].iconReadyParam, 1)
+    if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+        return result
+    end
+    --（3）更新数据（说明当前icon已弹出，可删除活动）
+    LaunchFrameConfig[uniqueNameIcon] = {
+        iconName = uniqueNameIcon
+    }
+    return {ret = ret, msg = msg}
+end
+
+
+--------------------------------------------------------------------------------------------------------------
+--------------------------------------------场景3：潘多拉落地页的相关函数----------------------------------------
+--------------------------------------------------错误码：-3XXX-------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+-- 管理端参数校验
+-- 错误码：-30XX
+function LaunchFrame.CheckAdminParamsPandoraTab(switchName, config)
+    local ret = 0
+    local msg = "ok"
+    LaunchFrameTools.ColorLogInfo(switchName, "[CheckAdminParamsPandoraTab（检查潘多拉落地页参数）]")
+    -- if switchName == nil or LaunchFrameConfig[switchName] ==
+    --     nil or next(LaunchFrameConfig[switchName]) == nil or
+    --     LaunchFrameConfig[switchName].extField == nil or
+    --     next(LaunchFrameConfig[switchName].extField) == nil or
+    --     LaunchFrameConfig[switchName].extField.pandoraTabPara == nil or
+    --     next(LaunchFrameConfig[switchName].extField.pandoraTabPara) ==
+    --     nil or
+    --     LaunchFrameConfig[switchName].extField.pandoraTabPara.tabRate ==
+    --     nil then
+    --     LaunchFrameTools.ColorLogInfo(switchName, "CheckPandoraTabParam param is false")
+    --     return false
+    -- end
+    -- return true
+    return {ret = ret, msg = msg}
+end
+
+-- 入口添加
+-- 错误码：-31XX
+function LaunchFrame.AddActionPandoraTab(switchName)
+    local ret = 0
+    local msg = "ok"
+    local result = {}
+    LaunchFrameTools.ColorLogInfo(switchName, "[AddActionPandoraTab（增加潘多拉落地页入口）]:")
+
+    --（1）检查当前是否允许增加潘多拉落地页入口（时间限制）
+    local uniqueNamePandoraTab = LaunchFrameConfig[switchName].uniqueNamePandoraTab
+    local pandoraTabTime = LaunchFrameConfig[switchName].extField.pandoraTabPara.tabTime
+    if LaunchFrameTools.CheckTime(switchName,pandoraTabTime) then -- 游戏内嵌展示判断
+        --（2）发送入口协议
+        LaunchFrameConfig[uniqueNamePandoraTab] = {
+            tabName = uniqueNamePandoraTab,
+        }
+        result = LaunchFrameMessager.pandoraTabReady(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].pandoraTabReadyParam, 1)
+        if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+            return result
+        end
+    else
+        LaunchFrameConfig[uniqueNamePandoraTab] = nil
+        ret = 0
+        msg = "当前时间不在潘多拉落地页配置的周期内"
+        return {ret = ret, msg = msg} -- 未在投放时间内，但返回0，继续后面的逻辑
+    end
+    return {ret = ret, msg = msg}
+end
+
+
+--------------------------------------------------------------------------------------------------------------
+---------------------------------------------场景4：游戏落地页的相关函数-----------------------------------------
+--------------------------------------------------错误码：-4XXX-------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+-- 管理端参数校验
+-- 错误码：-40XX
+function LaunchFrame.CheckAdminParamsGameTab(switchName, config)
+    local ret = 0
+    local msg = "ok"
+    LaunchFrameTools.ColorLogInfo(switchName, "[CheckAdminParamsGameTab（检查游戏落地页协议）]")
+    return {ret = ret, msg = msg}
+end
+
+-- 入口添加
+-- 错误码：-41XX
+function LaunchFrame.AddActionGameTab(switchName)
+    local ret = 0
+    local msg = "ok"
+    local result = {}
+    LaunchFrameTools.ColorLogInfo(switchName, "[AddActionGameTab（增加游戏落地页入口）]")
+    local uniqueNameGameTab = LaunchFrameConfig[switchName].uniqueNameGameTab
+    local gameTabTime = LaunchFrameConfig[switchName].extField.gameTabPara.tabTime
+    if LaunchFrameTools.CheckTime(switchName,gameTabTime) then -- 游戏内嵌展示判断
+        LaunchFrameConfig[uniqueNameGameTab] = {
+            tabName = uniqueNameGameTab,
+        }
+        result = LaunchFrameMessager.gameTabReady(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].gameTabReadyParam, 1)
+        if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+            return result
+        end
+    else
+        LaunchFrameConfig[uniqueNameGameTab] = nil
+        ret = 0
+        msg = "当前时间不在游戏落地页配置的周期内"
+        return {ret = ret, msg = msg} -- 未在投放时间内，但返回0，继续后面的逻辑
+    end
+    return {ret = ret, msg = msg}
+end
+
+
+--------------------------------------------------------------------------------------------------------------
+---------------------------------------------------初始化方法--------------------------------------------------
+--------------------------------------------------错误码：-50XX-------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+function LaunchFrame.Init(config)
+    local ret = 0
+    local msg = "ok"
+    local result = {}
+    -- step1：switchName初始化
+    if config == nil or next(config) == nil then
+        ret = -5101
+        msg = "必传参数：config未传入。".. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson("EMPTY", ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    if config.switchName == nil then
+        ret = -5102
+        msg = "必传参数：config.switchName未传入。".. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson("EMPTY", ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    local switchName = config.switchName
+
+    -- step2: 上报参数检查、初始化
+    LaunchFrameConfig[switchName] = {} -- 唯一key，每次进来就重置
+    LaunchFrameConfig[switchName].logKey = switchName .. "-" .. os.date("%Y%m%d-%H%M%S", os.time())
+    LaunchFrameConfig[switchName].logValue = {}
+    LaunchFrameConfig[switchName].logKeyInited = true
+
+    LaunchFrameConfig[switchName].HaveInited = false -- 是否初始化完成。只有LaunchFrame.Init先初始化完成，才能调用其他方法
+    LaunchFrameConfig[switchName].HaveActionAdded = false -- 是否添加入口完成。只有LaunchFrame.AddAction先添加了各种入口，才能调用其他方法
+    LaunchFrameConfig[switchName].LaunchDesc = "已配置的投放场景"
+
+    -- 上报config配置
+    local reportConfig = JsonManager.DecodeJson(JsonManager.EncodeJson(config));
+    if #reportConfig.extField > 100 then
+        -- 如果extField长度超过100则去掉它
+        reportConfig.extField = nil
+    end
+    LaunchFrameTools.ColorLogInfo(switchName, "上报config:" .. JsonManager.EncodeJson(reportConfig))
+    LaunchFrameTools.outputJson(switchName, 0, "上报config:" .. JsonManager.EncodeJson(reportConfig))
+
+    LaunchFrameTools.ColorLogInfo(switchName, "[活动开发调用：Init（初始化）]")
+    Logger.INFO("活动开发注意了！！！如需答疑请提供传入的参数信息：" .. JsonManager.EncodeJson(config))  --太长了
+    Logger.INFO("LaunchFrame初始化后的参数：LaunchFrameConfig=" .. JsonManager.EncodeJson(LaunchFrameConfig))
+    result = LaunchFrame.CheckReportParams(config)
+    if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+        LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+        return result
+    end
+    LaunchFrameConfig[switchName].activityId        = config.activityId
+    LaunchFrameConfig[switchName].actStyle          = config.actStyle
+    LaunchFrameConfig[switchName].channelId         = config.channelId
+    LaunchFrameConfig[switchName].bizCode           = config.bizCode
+    LaunchFrameConfig[switchName].linkseeaActionId  = config.linkseeaActionId
+    LaunchFrameConfig[switchName].linkseeTemplateId = config.linkseeTemplateId
+    LaunchFrameConfig[switchName].logParamsInited   = true
+
+    -- step3：基础参数检查
+    result = LaunchFrame.CheckBasicParams(config)
+    if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+        LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+        return result
+    end
+    local printTemp = LaunchFrameTools.DeepCopy(config)
+    printTemp.extField = "do_not_show"
+    LaunchFrameTools.ColorLogInfo(switchName, "开发传入的配置信息（删除了extField）：" .. JsonManager.EncodeJson(printTemp))
+    -- step4：初始化数据
+    local extField = JsonManager.DecodeJson(config.extField)
+
+    -- local sPubFromJson = JsonManager.DecodeJson(extField.sPubFrom);
+    local sPubFromJson;
+    if type(extField.sPubFrom) == "table" then
+        sPubFromJson = extField.sPubFrom;
+    else
+        sPubFromJson = JsonManager.DecodeJson(extField.sPubFrom);
+    end
+
+    local sPubFromList = {};
+    if sPubFromJson ~= nil then
+        for key, value in pairs(sPubFromJson) do
+            LaunchFrameTools.ColorLogInfo(switchName, "dd::" .. key .. "====" .. value)
+            sPubFromList[key] = value
+        end
+    end
+    extField.sPubFromList = sPubFromList
+
+    LaunchFrameConfig[switchName].extField = extField -- 管理端下发的extField
+    if config.countdown == nil then
+        LaunchFrameConfig[switchName].countdown = -1
+        LaunchFrameConfig[switchName].countdownIconHide = 1
+    else
+        LaunchFrameConfig[switchName].countdown = config.countdown
+        LaunchFrameConfig[switchName].countdownIconHide = 0
+    end
+    if config.pandoraTabSortId == nil then
+        LaunchFrameConfig[switchName].pandoraTabSortId = 0
+    else
+        LaunchFrameConfig[switchName].pandoraTabSortId = config.pandoraTabSortId
+    end
+    if config.gameTabSortId == nil then
+        LaunchFrameConfig[switchName].gameTabSortId = 0
+    else
+        LaunchFrameConfig[switchName].gameTabSortId = config.gameTabSortId
+    end
+    if config.ext == nil then
+        LaunchFrameConfig[switchName].ext = {}
+    else
+        LaunchFrameConfig[switchName].ext = config.ext
+    end
+
+    -- step5：解析各渠道投放场景 是否 在管理端中配置
+    local haveLaunchConfig = false -- 是否配置了至少1种投放场景
+    local xxtoxx = extField.protocolPara -- 当前业务的json转换参数（需要这个转换函数的原因是：某些参数是跟着 业务/业务+场景 的维度定的，需要灵犀管理端根据潘多拉sdk开发提供的json内容配置此字段。）
+
+
+    -- step5.1： 是否有拍脸
+    if LaunchFrameConfig[switchName].extField.popPara ~= nil then
+        if LaunchFrameConfig[switchName].extField.sPubFrom ~= "channel" and LaunchFrameConfig[switchName].extField.sPubFromList["pop"] ~= "channel" then
+            LaunchFrameTools.ColorLogWarning(switchName, "场景1：登录弹出（拍脸），未开启投放：" .. tostring(LaunchFrameConfig[switchName].extField.sPubFrom))
+        else
+            haveLaunchConfig = true
+            LaunchFrameConfig[switchName].LaunchDesc = LaunchFrameConfig[switchName].LaunchDesc .. "，登录弹出（拍脸）"
+            LaunchFrameTools.ColorLogInfo(switchName, "场景1：登录弹出（拍脸），已配置。")
+            result = LaunchFrame.CheckAdminParamsPop(switchName, LaunchFrameConfig[switchName].extField.popPara)
+            if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+                LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+                return result
+            end
+            LaunchFrameConfig[switchName].uniqueNamePop = switchName .. "_LAUNCHFRAME_POP" -- uniqueNamePop为表示当前活动“拍脸”场景的唯一key（但不能表明能能出现“拍脸”，因为还需要进行时间、次数限制的校验）
+            -- 拍脸入口参数
+            LaunchFrameConfig[switchName].popReadyParam = { -- 入口参数
+                content         = tostring(switchName),
+            }
+            LaunchFrameConfig[switchName].pandoraClosedParam = { -- 关闭参数
+                content         = tostring(switchName),
+            }
+        end
+    end
+
+    -- step5.2： 是否有icon
+    if LaunchFrameConfig[switchName].extField.iconPara ~= nil then
+        if LaunchFrameConfig[switchName].extField.sPubFrom ~= "channel" and LaunchFrameConfig[switchName].extField.sPubFromList["icon"] ~= "channel" then
+            LaunchFrameTools.ColorLogWarning(switchName, "场景2：icon，未开启投放：" .. tostring(LaunchFrameConfig[switchName].extField.sPubFrom))
+        else
+            haveLaunchConfig = true
+            LaunchFrameConfig[switchName].LaunchDesc = LaunchFrameConfig[switchName].LaunchDesc .. "，icon"
+            LaunchFrameTools.ColorLogInfo(switchName, "场景2：icon，已配置。")
+            result = LaunchFrame.CheckAdminParamsIcon(switchName, LaunchFrameConfig[switchName].extField.iconPara)
+            if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+                LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+                return result
+            end
+            LaunchFrameConfig[switchName].uniqueNameIcon = switchName .. "_LAUNCHFRAME_ICON" -- uniqueNameIcon为表示当前活动“icon”场景的唯一key（但不能表明就能出现此场景，因为还需要进行次数限制的校验）
+            local module = 'icon'       -- 默认为'icon'，可由extField.protocolPara.icon.module覆盖
+            local tab = switchName      -- 默认为当前活动的switchName，可由extField.protocolPara.icon.tab覆盖
+            if xxtoxx.icon ~= nil and xxtoxx.icon.module ~= nil then
+                module = xxtoxx.icon.module
+            end
+            if xxtoxx.icon ~= nil and xxtoxx.icon.ta ~= nil then
+                tab = xxtoxx.icon.tab
+            end
+            local linkseeData = LaunchFrameConfig[switchName].extField.iconPara
+
+            -- 获取icon上展示的文字
+            local iconName = linkseeData.iconName;
+            if linkseeData.iconName == nil then
+                iconName = "";
+            end
+
+            -- icon上的倒计时 launchframe对于倒计时的优先级：开发传入的countdown 高于 倒计时时长 高于 固定结束时间点   period为秒
+            if LaunchFrameConfig[switchName].countdown ~= -1 then
+                --不需要转化
+                LaunchFrameConfig[switchName].countdownIconHide = 0;
+            elseif linkseeData.iconCountDown ~= nil
+                    and linkseeData.iconCountDown.period ~= nil
+                    and linkseeData.iconCountDown.period ~= ""
+                    and tonumber(linkseeData.iconCountDown.period) > 0
+                    and linkseeData.iconCountDown.dtStartTime == "" then
+
+                LaunchFrameConfig[switchName].countdown = tonumber(linkseeData.iconCountDown.period)
+                LaunchFrameConfig[switchName].countdownIconHide = 0;
+            elseif linkseeData.iconCountDown ~= nil
+                    and linkseeData.iconCountDown.dtStartTime ~= nil
+                    and linkseeData.iconCountDown.dtStartTime ~= ""
+                    and linkseeData.iconCountDown.period ~= nil
+                    and linkseeData.iconCountDown.period ~= ""
+                    and tonumber(linkseeData.iconCountDown.period) > 0 then
+                -- 指定每天的开始时间 然后展示倒计固定时长
+
+                --计算是否到达每天开始时间
+                local nowTime = os.time();
+                local iconDownStartTime = LaunchFrameTools.DateTimeToTimeStamp(os.date("%Y-%m-%d " .. tostring(linkseeData.iconCountDown.dtStartTime)));
+                if iconDownStartTime ~= nil and nowTime >= iconDownStartTime then
+                    local iconDownEndTime = iconDownStartTime + tonumber(linkseeData.iconCountDown.period)
+                    --计算剩余时间（秒）
+                    if iconDownEndTime >= nowTime then
+                        LaunchFrameConfig[switchName].countdown = iconDownEndTime - nowTime
+                        LaunchFrameConfig[switchName].countdownIconHide = 0;
+                    end
+                end
+            else
+                LaunchFrameConfig[switchName].countdownIconHide = 1;
+            end
+
+            LaunchFrameConfig[switchName].iconReadyParam = { -- 入口参数
+                type                = 'pandoraShowEntrance',
+                module              = module,
+                tab                 = tab,
+                iconUrl             = tostring(linkseeData.iconUrl),
+                countdown           = LaunchFrameConfig[switchName].countdown,
+                countdownIconHide   = LaunchFrameConfig[switchName].countdownIconHide,
+                showName            = iconName,
+            }
+            LaunchFrameConfig[switchName].iconRedpointParam = { -- 红点参数
+                type    = 'pandoraShowRedpoint',
+                module  = module,
+                tab     = tab,
+            }
+        end
+    end
+
+    -- step5.3： 是否有潘多拉落地页
+    if LaunchFrameConfig[switchName].extField.pandoraTabPara ~= nil then -- 有潘多拉内嵌落地页
+        if LaunchFrameConfig[switchName].extField.sPubFrom ~= "channel" and LaunchFrameConfig[switchName].extField.sPubFromList["pandoraTab"] ~= "channel" then
+            LaunchFrameTools.ColorLogWarning(switchName, "场景3：潘多拉落地页，未开启投放：" .. tostring(LaunchFrameConfig[switchName].extField.sPubFrom))
+        else
+            haveLaunchConfig = true
+            LaunchFrameConfig[switchName].LaunchDesc = LaunchFrameConfig[switchName].LaunchDesc .. "，潘多拉落地页"
+            LaunchFrameTools.ColorLogInfo(switchName, "场景3：潘多拉落地页，已配置。")
+            result = LaunchFrame.CheckAdminParamsPandoraTab(switchName, LaunchFrameConfig[switchName].extField.pandoraTabPara)
+            if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+                LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+                return result
+            end
+            LaunchFrameConfig[switchName].uniqueNamePandoraTab =switchName .. "_LAUNCHFRAME_PANDORATAB" -- uniqueNamePandoraTab为表示当前活动“潘多拉落地页”场景的唯一key（但不能表明就能出现此场景，因为还需要进行次数限制的校验）
+            local module = 'pandoraTab'     -- 默认为'pandoraTab'，可由extField.protocolPara.pandoraTab.module覆盖
+            local tab = switchName          -- 默认为当前活动的switchName，可由extField.protocolPara.pandoraTab.tab覆盖
+
+            if xxtoxx.pandoraTab ~= nil and xxtoxx.pandoraTab.module ~= nil then
+                module = xxtoxx.pandoraTab.module
+            end
+            if xxtoxx.pandoraTab ~= nil and xxtoxx.pandoraTab.tab ~= nil then
+                tab = xxtoxx.pandoraTab.tab
+            end
+            local pandoraTabPara = LaunchFrameConfig[switchName].extField.pandoraTabPara
+
+            -- 设置角标的文字的默认值
+            local tabCornerMark = pandoraTabPara.tabCornerMark;
+            if pandoraTabPara.tabCornerMark == nil then
+                tabCornerMark = "";
+            end
+
+            -- 设置落地页排序的默认值 默认为0 越大越靠上
+            local tabOrder = pandoraTabPara.tabOrder;
+            if pandoraTabPara.tabOrder == nil then
+                tabOrder = "0";
+            end
+
+            LaunchFrameConfig[switchName].pandoraTabReadyParam = { -- 入口参数
+                type                = 'pandoraShowEntrance',
+                module              = module,
+                tab                 = tab,
+                tag                 = tostring(pandoraTabPara.tag),
+                sortId              = LaunchFrameConfig[switchName].pandoraTabSortId,
+                showName            = tostring(pandoraTabPara.tabText),
+                targetUrl           = tostring(pandoraTabPara.tabBgUrl),
+                countdown           = LaunchFrameConfig[switchName].countdown,
+                tabCornerMark       = tabCornerMark,
+                tabOrder            = tabOrder,
+            }
+
+            LaunchFrameConfig[switchName].pandoraTabRedpointParam = { -- 红点参数
+                type                = 'pandoraShowRedpoint',
+                module              = module,
+                tab                 = tab,
+            }
+        end
+    end
+
+    -- step5.4： 是否有游戏落地页
+    if LaunchFrameConfig[switchName].extField.gameTabPara ~= nil then -- 有游戏内嵌落地页
+        if LaunchFrameConfig[switchName].extField.sPubFrom ~= "channel" and LaunchFrameConfig[switchName].extField.sPubFromList["gameTab"] ~= "channel" then
+            LaunchFrameTools.ColorLogWarning(switchName, "场景4：游戏落地页，未开启投放：" .. tostring(LaunchFrameConfig[switchName].extField.sPubFrom))
+        else
+            haveLaunchConfig = true
+            LaunchFrameConfig[switchName].LaunchDesc = LaunchFrameConfig[switchName].LaunchDesc .. "，游戏落地页"
+            LaunchFrameTools.ColorLogInfo(switchName, "场景4：游戏落地页，已配置。")
+            result = LaunchFrame.CheckAdminParamsGameTab(switchName, LaunchFrameConfig[switchName].extField.gameTabPara)
+            if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+                LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+                return result
+            end
+            LaunchFrameConfig[switchName].uniqueNameGameTab =switchName .. "_LAUNCHFRAME_GAMETAB" -- uniqueNameGameTab为表示当前活动“游戏落地页”场景的唯一key（但不能表明就能出现此场景，因为还需要进行次数限制的校验）
+            local module = 'gameTab'     -- 默认为'gameTab'，可由extField.protocolPara.gameTab.module覆盖
+            local tab = switchName          -- 默认为当前活动的switchName，可由extField.protocolPara.gameTab.tab覆盖
+            if xxtoxx.gameTab ~= nil and xxtoxx.gameTab.module ~= nil then
+                module = xxtoxx.gameTab.module
+            end
+            if xxtoxx.gameTab ~= nil and xxtoxx.gameTab.tab ~= nil then
+                tab = xxtoxx.gameTab.tab
+            end
+            local gameTabPara = LaunchFrameConfig[switchName].extField.gameTabPara
+
+            -- 设置角标的文字的默认值
+            local tabCornerMark = gameTabPara.tabCornerMark;
+            if gameTabPara.tabCornerMark == nil then
+                tabCornerMark = "";
+            end
+
+            -- 设置落地页排序的默认值 默认为0 越大越靠上
+            local tabOrder = gameTabPara.tabOrder;
+            if gameTabPara.tabOrder == nil then
+                tabOrder = "0";
+            end
+
+            LaunchFrameConfig[switchName].gameTabReadyParam = { -- 入口参数
+                type                = 'pandoraShowEntrance',
+                module              = module,
+                tab                 = tab,
+                tag                 = tostring(gameTabPara.tag),
+                sortId              = LaunchFrameConfig[switchName].gameTabSortId,
+                showName            = tostring(gameTabPara.tabText),
+                targetUrl           = tostring(gameTabPara.tabBgUrl),
+                countdown           = LaunchFrameConfig[switchName].countdown,
+                tabCornerMark       = tabCornerMark,
+                tabOrder            = tabOrder,
+            }
+            LaunchFrameConfig[switchName].gameTabRedpointParam = { -- 红点参数
+                type                = 'pandoraShowRedpoint',
+                module              = module,
+                tab                 = tab,
+            }
+        end
+    end
+
+
+    if haveLaunchConfig == false then
+        LaunchFrameConfig[switchName].LaunchDesc = "管理端未选择任何投放场景。"
+        LaunchFrameTools.ColorLogInfo(switchName, LaunchFrameConfig[switchName].LaunchDesc .. LaunchFrameTools.LaunchAdminDeveloper)
+    else
+        LaunchFrameTools.ColorLogInfo(switchName, "————>" .. tostring(LaunchFrameConfig[switchName].LaunchDesc))
+    end
+
+    -- step6： 拍脸默认次数
+    LaunchFrameConfig[switchName].popConfig = {maxDailyCount = 9999, maxTotalCount = 9999}
+    -- step7：获取 cookie数据
+    LaunchFrameConfig[switchName].cookieData = LaunchFrameTools.GetCookieInfo(switchName, userData)
+
+    -- 打印所有初始化参数，然后返回
+    Logger.INFO("LaunchFrame初始化后的参数：LaunchFrameConfig=" .. JsonManager.EncodeJson(LaunchFrameConfig))
+    LaunchFrameConfig[switchName].HaveInited = true -- 标记此活动已初始化
+    LaunchFrameTools.outputJson(switchName, ret, msg)
+    return {ret = ret, msg = msg}
+end
+
+
+
+--------------------------------------------------------------------------------------------------------------
+----------------------------------------添加活动入口，各场景通用------------------------------------------------
+---------------------------------------------错误码：-60XX------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+function LaunchFrame.AddAction(switchName)
+    local ret = 0
+    local msg = "ok"
+    local result = {}
+    if switchName == nil then
+        ret = -6001
+        msg = "未传入参数switchName。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson("EMPTY", ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    if LaunchFrameConfig[switchName] == nil then
+        ret = -6002
+        msg = "未调用初始化方法（1）：LaunchFrame.Init。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson("EMPTY", ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    LaunchFrameConfig[switchName].logKey = switchName .. "-" .. os.date("%Y%m%d-%H%M%S", os.time())
+    LaunchFrameConfig[switchName].logValue = {}
+    LaunchFrameTools.ColorLogInfo(switchName, "[活动开发调用：AddAction（添加活动入口）]")
+    if LaunchFrameConfig[switchName].HaveInited == nil or LaunchFrameConfig[switchName].HaveInited == false then
+        ret = -7003
+        msg = "调用初始化方法失败（2）：LaunchFrame.Init。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson(switchName, ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    LaunchFrameTools.ColorLogInfo(switchName, "————>" .. tostring(LaunchFrameConfig[switchName].LaunchDesc))
+    -- 置为已调用过添加活动入口的方法
+    LaunchFrameConfig[switchName].HaveActionAdded = true
+
+    -- 场景1：登录弹出（拍脸）
+    if LaunchFrameConfig[switchName].uniqueNamePop ~= nil then
+        result = LaunchFrame.AddActionPop(switchName)
+        if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+            LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+            return result
+        end
+    end
+    -- 场景2：icon
+    if LaunchFrameConfig[switchName].uniqueNameIcon ~= nil then
+        result = LaunchFrame.AddActionIcon(switchName)
+        if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+            LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+            return result
+        end
+    end
+    -- 场景3：潘多拉内嵌页
+    if LaunchFrameConfig[switchName].uniqueNamePandoraTab ~= nil then
+        result = LaunchFrame.AddActionPandoraTab(switchName)
+        if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+            LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+            return result
+        end
+    end
+    -- 场景4：游戏内嵌页
+    if LaunchFrameConfig[switchName].uniqueNameGameTab ~= nil then
+        result = LaunchFrame.AddActionGameTab(switchName)
+        if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+            LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+            return result
+        end
+    end
+
+    -- 上报addAction日志
+    LaunchFrameTools.outputJson(switchName, ret, msg)
+
+    -- 默认调用一次红点添加
+    LaunchFrameTools.ColorLogInfo(switchName, "————>默认逻辑：AddAction中默认调用一次红点添加")
+    result = LaunchFrame.UpdateActionHot(switchName, 1)
+    if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+        LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+        return result
+    end
+    -- 标记此活动已添加入口
+
+    return {ret = ret, msg = msg}
+end
+
+
+
+--------------------------------------------------------------------------------------------------------------
+----------------------------------------- 关闭活动，适用于登录弹出（拍脸）---------------------------------------
+--------------------------------------------------错误码：-70XX-------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+function LaunchFrame.CloseAction(switchName)
+    local ret = 0
+    local msg = "ok"
+    local result = {}
+    if switchName == nil then
+        ret = -7001
+        msg = "未传入参数switchName。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson("EMPTY", ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    if LaunchFrameConfig[switchName] == nil then
+        ret = -7002
+        msg = "未调用初始化方法（1）：LaunchFrame.Init。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson("EMPTY", ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    LaunchFrameConfig[switchName].logKey = switchName .. "-" .. os.date("%Y%m%d-%H%M%S", os.time())
+    LaunchFrameConfig[switchName].logValue = {}
+    LaunchFrameTools.ColorLogInfo(switchName, "[活动开发调用：CloseAction（关闭活动。适用于登录弹出）]")
+    if LaunchFrameConfig[switchName].HaveInited == nil or LaunchFrameConfig[switchName].HaveInited == false then
+        ret = -7003
+        msg = "调用初始化方法失败（2）：LaunchFrame.Init。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson(switchName, ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    LaunchFrameTools.ColorLogInfo(switchName, "————>" .. tostring(LaunchFrameConfig[switchName].LaunchDesc))
+    if LaunchFrameConfig[switchName].HaveActionAdded == nil or LaunchFrameConfig[switchName].HaveActionAdded == false then
+        ret = -7004
+        msg = "未调用添加活动方法：LaunchFrame.AddAction。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson(switchName, ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    if LaunchFrameConfig[switchName].uniqueNamePop == nil  then
+        ret = 0
+        msg = "关闭活动，适用于登录弹出（拍脸）。未配置拍脸，不需要。"
+        LaunchFrameTools.outputJson(switchName, ret, msg)
+        return {ret = ret, msg = msg}
+    end
+
+    result = LaunchFrameMessager.pandoraClosed(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].pandoraClosedParam)
+    if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+        LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+        return result
+    end
+    LaunchFrameTools.outputJson(switchName, ret, msg)
+    return {ret = ret, msg = msg}
+end
+
+
+
+--------------------------------------------------------------------------------------------------------------
+---------------------------------- 删除活动，适用于icon、潘多拉落地页、游戏落地页---------------------------------
+--------------------------------------------------错误码：-80XX-------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+function LaunchFrame.DeleteAction(switchName)
+    local ret = 0
+    local msg = "ok"
+    local result = {}
+    if switchName == nil then
+        ret = -8001
+        msg = "未传入参数switchName。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson("EMPTY", ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    if LaunchFrameConfig[switchName] == nil then
+        ret = -8002
+        msg = "未调用初始化方法（1）：LaunchFrame.Init。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson("EMPTY", ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    LaunchFrameConfig[switchName].logKey = switchName .. "-" .. os.date("%Y%m%d-%H%M%S", os.time())
+    LaunchFrameConfig[switchName].logValue = {}
+    LaunchFrameTools.ColorLogInfo(switchName, "[活动开发调用：DeleteAction（删除活动，适用于icon、潘多拉落地页、游戏落地页）]")
+    if LaunchFrameConfig[switchName].HaveInited == nil or LaunchFrameConfig[switchName].HaveInited == false then
+        ret = -8003
+        msg = "调用初始化方法失败（2）：LaunchFrame.Init。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson(switchName, ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    LaunchFrameTools.ColorLogInfo(switchName, "————>" .. tostring(LaunchFrameConfig[switchName].LaunchDesc))
+    if LaunchFrameConfig[switchName].HaveActionAdded == nil or LaunchFrameConfig[switchName].HaveActionAdded == false then
+        ret = -8004
+        msg = "未调用添加活动方法：LaunchFrame.AddAction。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson(switchName, ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    -- 场景2：icon
+    if LaunchFrameConfig[switchName].uniqueNameIcon ~= nil then
+        local uniqueNameIcon = LaunchFrameConfig[switchName].uniqueNameIcon
+        if LaunchFrameConfig[uniqueNameIcon] ~=nil and next(LaunchFrameConfig[uniqueNameIcon]) ~= nil then
+            result = LaunchFrameMessager.IconReady(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].iconReadyParam, 0)
+            if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+                LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+                return result
+            end
+        end
+        LaunchFrameConfig[uniqueNameIcon] = nil
+    end
+    -- 场景3：潘多拉内嵌页
+    if LaunchFrameConfig[switchName].uniqueNamePandoraTab ~= nil then
+        local uniqueNamePandoraTab = LaunchFrameConfig[switchName].uniqueNamePandoraTab
+        if LaunchFrameConfig[uniqueNamePandoraTab] ~=nil and next(LaunchFrameConfig[uniqueNamePandoraTab]) ~= nil then
+            result = LaunchFrameMessager.pandoraTabReady(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].pandoraTabReadyParam, 0)
+            if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+                LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+                return result
+            end
+        end
+        LaunchFrameConfig[uniqueNamePandoraTab] = nil
+    end
+    -- 场景4：游戏内嵌页
+    if  LaunchFrameConfig[switchName].uniqueNameGameTab ~= nil then
+        local uniqueNameGameTab = LaunchFrameConfig[switchName].uniqueNameGameTab
+        if LaunchFrameConfig[uniqueNameGameTab] ~=nil and next(LaunchFrameConfig[uniqueNameGameTab]) ~= nil then
+            result = LaunchFrameMessager.gameTabReady(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].gameTabReadyParam, 0)
+            if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+                LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+                return result
+            end
+        end
+        LaunchFrameConfig[uniqueNameGameTab] = nil
+    end
+    LaunchFrameTools.outputJson(switchName, ret, msg)
+    return {ret = ret, msg = msg}
+end
+
+--------------------------------------------------------------------------------------------------------------
+------------------------------- 更新红点相关函数，适用于icon、潘多拉落地页、游戏落地页-----------------------------
+--------------------------------------------------错误码：-9XXX-------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+-- 更新红点
+-- 错误码：-90XX
+function LaunchFrame.ShowActionHot(switchName)
+    local ret = 0
+    local msg = "ok"
+    local result = {}
+    if switchName == nil then
+        ret = -9001
+        msg = "未传入参数switchName。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson("EMPTY", ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    if LaunchFrameConfig[switchName] == nil then
+        ret = -9002
+        msg = "未调用初始化方法（1）：LaunchFrame.Init。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson("EMPTY", ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    LaunchFrameConfig[switchName].logKey = switchName .. "-" .. os.date("%Y%m%d-%H%M%S", os.time())
+    LaunchFrameConfig[switchName].logValue = {}
+    LaunchFrameTools.ColorLogInfo(switchName, "[活动开发调用：ShowActionHot（强制展示红点，适用于icon、潘多拉落地页、游戏落地页）。]")
+    if LaunchFrameConfig[switchName].HaveInited == nil or LaunchFrameConfig[switchName].HaveInited == false then
+        ret = -9003
+        msg = "调用初始化方法失败（2）：LaunchFrame.Init。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson(switchName, ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    LaunchFrameTools.ColorLogInfo(switchName, "————>" .. tostring(LaunchFrameConfig[switchName].LaunchDesc))
+    if LaunchFrameConfig[switchName].HaveActionAdded == nil or LaunchFrameConfig[switchName].HaveActionAdded == false then
+        ret = -9004
+        msg = "未调用添加活动方法：LaunchFrame.AddAction。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson(switchName, ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    if LaunchFrameConfig[switchName].uniqueNameIcon == nil and LaunchFrameConfig[switchName].uniqueNamePandoraTab == nil and LaunchFrameConfig[switchName].uniqueNameGameTab == nil then
+        ret = 0
+        msg = "没有icon/潘多拉落地页/游戏落地页投放场景，不需要红点。返回。"
+        LaunchFrameTools.outputJson(switchName, ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    local uniqueNameIcon = LaunchFrameConfig[switchName].uniqueNameIcon
+    local uniqueNamePandoraTab = LaunchFrameConfig[switchName].uniqueNamePandoraTab
+    local uniqueNameGameTab = LaunchFrameConfig[switchName].uniqueNameGameTab
+    if uniqueNameIcon~=nil and  LaunchFrameConfig[uniqueNameIcon] ~= nil and next(LaunchFrameConfig[uniqueNameIcon]) ~= nil then
+        local content = "1"
+        result = LaunchFrameMessager.IconRedpoint(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].iconRedpointParam , content)
+        if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+            LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+            return result
+        end
+    end
+    if uniqueNamePandoraTab~=nil and  LaunchFrameConfig[uniqueNamePandoraTab] ~= nil and next(LaunchFrameConfig[uniqueNamePandoraTab]) ~= nil then
+        local content = "1"
+        result = LaunchFrameMessager.pandoraTabRedpoint(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].pandoraTabRedpointParam , content)
+        if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+            LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+            return result
+        end
+    end
+    if uniqueNameGameTab~=nil and LaunchFrameConfig[uniqueNameGameTab] ~= nil and next(LaunchFrameConfig[uniqueNameGameTab]) ~= nil then
+        local content = "1"
+        result = LaunchFrameMessager.gameTabRedpoint(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].gameTabRedpointParam , content)
+        if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+            LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+            return result
+        end
+    end
+    LaunchFrameTools.outputJson(switchName, ret, msg)
+    return {ret = ret, msg = msg}
+end
+
+--------------------------------------------------------------------------------------------------------------
+------------------------------- 更新红点相关函数，适用于icon、潘多拉落地页、游戏落地页-----------------------------
+--------------------------------------------------错误码：-9XXX-------------------------------------------------
+--------------------------------------------------------------------------------------------------------------
+-- 更新红点
+-- 错误码：-90XX
+function LaunchFrame.UpdateActionHot(switchName, num)
+    local ret = 0
+    local msg = "ok"
+    local result = {}
+    if switchName == nil then
+        ret = -9001
+        msg = "未传入参数switchName。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson("EMPTY", ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    if LaunchFrameConfig[switchName] == nil then
+        ret = -9002
+        msg = "未调用初始化方法（1）：LaunchFrame.Init。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson("EMPTY", ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    LaunchFrameConfig[switchName].logKey = switchName .. "-" .. os.date("%Y%m%d-%H%M%S", os.time())
+    LaunchFrameConfig[switchName].logValue = {}
+    LaunchFrameTools.ColorLogInfo(switchName, "[活动开发调用：UpdateActionHot（更新红点，适用于icon、潘多拉落地页、游戏落地页）。调用红点状态：" .. num .. "]")
+    if LaunchFrameConfig[switchName].HaveInited == nil or LaunchFrameConfig[switchName].HaveInited == false then
+        ret = -9003
+        msg = "调用初始化方法失败（2）：LaunchFrame.Init。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson(switchName, ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    LaunchFrameTools.ColorLogInfo(switchName, "————>" .. tostring(LaunchFrameConfig[switchName].LaunchDesc))
+    if LaunchFrameConfig[switchName].HaveActionAdded == nil or LaunchFrameConfig[switchName].HaveActionAdded == false then
+        ret = -9004
+        msg = "未调用添加活动方法：LaunchFrame.AddAction。" .. LaunchFrameTools.LaunchFrameCustomer
+        LaunchFrameTools.outputJson(switchName, ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    if LaunchFrameConfig[switchName].uniqueNameIcon == nil and LaunchFrameConfig[switchName].uniqueNamePandoraTab == nil and LaunchFrameConfig[switchName].uniqueNameGameTab == nil then
+        ret = 0
+        msg = "没有icon/潘多拉落地页/游戏落地页投放场景，不需要红点。返回。"
+        LaunchFrameTools.outputJson(switchName, ret, msg)
+        return {ret = ret, msg = msg}
+    end
+    local uniqueNameIcon = LaunchFrameConfig[switchName].uniqueNameIcon
+    local uniqueNamePandoraTab = LaunchFrameConfig[switchName].uniqueNamePandoraTab
+    local uniqueNameGameTab = LaunchFrameConfig[switchName].uniqueNameGameTab
+    if uniqueNameIcon~=nil and  LaunchFrameConfig[uniqueNameIcon] ~= nil and next(LaunchFrameConfig[uniqueNameIcon]) ~= nil then
+        local content = "0"
+        if num > 0 then content = "1" end
+        result = LaunchFrame.TestHotCountCondition(switchName,  "icon", num)
+        if result == nil or result['ret'] == nil or (result['ret'] ~= 0 and result['ret'] ~= -9104) then
+            LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+            return result
+        end
+        if result['ret'] == 0 and num > 0 then
+            if result['rate'] ~= nil and result['rate'] == 3 then
+                LaunchFrameTools.ColorLogInfo(switchName, "case1: 管理端选的不展示红点，直接不展示]")
+                content = "0"
+            else
+                LaunchFrameTools.ColorLogInfo(switchName, "case2: 可以展示红点]")
+                content = "1"
+            end
+        else
+            LaunchFrameTools.ColorLogInfo(switchName, "case3: 当前不需要展示红点]")
+            content = "0"
+        end
+        result = LaunchFrameMessager.IconRedpoint(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].iconRedpointParam , content)
+        if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+            LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+            return result
+        end
+    end
+    if uniqueNamePandoraTab~=nil and  LaunchFrameConfig[uniqueNamePandoraTab] ~= nil and next(LaunchFrameConfig[uniqueNamePandoraTab]) ~= nil then
+        local content = "0"
+        if num > 0 then content = "1" end
+        result = LaunchFrame.TestHotCountCondition(switchName,  "pandoraTab", num)
+        if result == nil or result['ret'] == nil or (result['ret'] ~= 0 and result['ret'] ~= -9104) then
+            LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+            return result
+        end
+        if result['ret'] == 0 and num > 0 then
+            if result['rate'] ~= nil and result['rate'] == 3 then
+                LaunchFrameTools.ColorLogInfo(switchName, "case1: 管理端选的不展示红点，直接不展示]")
+                content = "0"
+            else
+                LaunchFrameTools.ColorLogInfo(switchName, "case2: 可以展示红点]")
+                content = "1"
+            end
+        else
+            LaunchFrameTools.ColorLogInfo(switchName, "case3: 当前不需要展示红点]")
+            content = "0"
+        end
+        result = LaunchFrameMessager.pandoraTabRedpoint(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].pandoraTabRedpointParam , content)
+        if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+            LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+            return result
+        end
+    end
+    if uniqueNameGameTab~=nil and LaunchFrameConfig[uniqueNameGameTab] ~= nil and next(LaunchFrameConfig[uniqueNameGameTab]) ~= nil then
+        local content = "0"
+        if num > 0 then content = "1" end
+        result = LaunchFrame.TestHotCountCondition(switchName,  "gameTab", num)
+        if result == nil or result['ret'] == nil or (result['ret'] ~= 0 and result['ret'] ~= -9104) then
+            LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+            return result
+        end
+        if result['ret'] == 0 and num > 0 then
+            if result['rate'] ~= nil and result['rate'] == 3 then
+                LaunchFrameTools.ColorLogInfo(switchName, "case1: 管理端选的不展示红点，直接不展示")
+                content = "0"
+            else
+                LaunchFrameTools.ColorLogInfo(switchName, "case2: 可以展示红点")
+                content = "1"
+            end
+        else
+            LaunchFrameTools.ColorLogInfo(switchName, "case3: 当前不需要展示红点")
+            content = "0"
+        end
+        result = LaunchFrameMessager.gameTabRedpoint(switchName, LaunchFrameConfig[switchName].ext, LaunchFrameConfig[switchName].gameTabRedpointParam , content)
+        if result == nil or result['ret'] == nil or result['ret'] ~= 0 then
+            LaunchFrameTools.outputJson(switchName, result['ret'], result['msg'])
+            return result
+        end
+    end
+    LaunchFrameTools.outputJson(switchName, ret, msg)
+    return {ret = ret, msg = msg}
+end
+
+-- 判断红点是否达到次数限制
+-- 错误码：-91XX
+function LaunchFrame.TestHotCountCondition(switchName, type, num)
+    local ret = 0
+    local msg = "ok"
+    local result = {}
+    LaunchFrameTools.ColorLogInfo(switchName, "[TestHotCountCondition（红点次数限制判断）]")
+    local config = ""  --管理端针对当前场景的para配置
+    local HotRate = ""  --当前场景配置的红点类型
+    local TypeName = ""  --当前“switchname_场景配置”的名称，保存在客户端内，作为小红点的频率限制逻辑的唯一key
+    if type == "icon" then
+        config =  LaunchFrameConfig[switchName].extField.iconPara
+        if config.iconRate == nil or config.iconRate == "NaN" or config.iconRate == "" then
+            ret = -9101
+            msg = "灵犀管理端选择了icon场景，但未下发iconRate字段，请联系灵犀管理端投放负责人排查（zhicao）"
+            return {ret = ret, msg = msg}
+        end
+        HotRate = tonumber(config.iconRate)
+        TypeName = LaunchFrameConfig[switchName].uniqueNameIcon
+    elseif type == "pandoraTab" then
+        config =  LaunchFrameConfig[switchName].extField.pandoraTabPara
+        if config.tabRate == nil or config.tabRate == "NaN" or config.tabRate == "" then
+            ret = -9102
+            msg = "灵犀管理端选择了潘多拉落地页场景，但未下发tabRate字段，请联系灵犀管理端投放负责人排查（zhicao）"
+            return {ret = ret, msg = msg}
+        end
+        HotRate = tonumber(config.tabRate)
+        TypeName = LaunchFrameConfig[switchName].uniqueNamePandoraTab
+    elseif type == "gameTab" then
+        config =  LaunchFrameConfig[switchName].extField.gameTabPara
+        if config.tabRate == nil or config.tabRate == "NaN" or config.tabRate == "" then
+            ret = -9103
+            msg = "灵犀管理端选择了游戏落地页场景，但未下发tabRate字段，请联系灵犀管理端投放负责人排查（zhicao）"
+            return {ret = ret, msg = msg}
+        end
+        HotRate = tonumber(config.tabRate)
+        TypeName = LaunchFrameConfig[switchName].GameTabName
+    end
+    LaunchFrameTools.ColorLogInfo(switchName, "出现频率，1每次登录出现，2每日一次，3无需红点。当前类型是：" .. HotRate)
+
+    LaunchFrameConfig[switchName]['HotRate'] = HotRate
+    if HotRate == 3 then -- 不需要红点
+        ret = 0
+        msg = "不需要红点，直接返回"
+        LaunchFrameTools.ColorLogInfo(switchName, "类型3：无需红点，直接返回")
+        return {ret = ret, msg = msg, rate = HotRate}
+    elseif HotRate == 1 then -- 每次登录出现一次
+        LaunchFrameTools.ColorLogInfo(switchName, "类型1：每次登录出现，直接返回")
+        return {ret = ret, msg = msg, rate = HotRate}
+    end
+    -- HotRate == 2，每日一次
+    local dateStr = os.date("%Y-%m-%d")
+    -- case1：如果玩家有记录，取出记录，判断是否是今日的记录，是今日的，返回已展示过，且不用记录
+    if LaunchFrameConfig[switchName].cookieData ~= nil and LaunchFrameConfig[switchName].cookieData.TypeName ~= nil and LaunchFrameConfig[switchName].cookieData.TypeName.hotDaily ~= nil and next(LaunchFrameConfig[switchName].cookieData.TypeName.hotDaily) ~= nil then
+        local entry = LaunchFrameConfig[switchName].cookieData.TypeName.hotDaily -- 读取已有的记录
+        if entry["date"] == dateStr then -- 当日重复展示
+            ret = -9104
+            msg = "当日已展示过红点，无需重复展示"
+            LaunchFrameTools.ColorLogInfo(switchName, "类型2，每日一次：当日已展示过红点，无需重复展示")
+            return {ret = ret, msg = msg, rate = HotRate}
+        end
+    end
+    -- case2：需要展示红点
+    -- case2.1：在调用消除红点时（num ==0），记录用户本次展示红点的cookie
+    LaunchFrameTools.ColorLogInfo(switchName, "类型2，每日一次：当日未展示过红点，展示红点")
+    if num == 0 then
+        LaunchFrameTools.ColorLogInfo(switchName, "关闭红点操作，加一条已调用红点的日志。")
+        local newEntry = {
+            ["date"] = dateStr -- 日期
+        }
+        LaunchFrameConfig[switchName].cookieData.TypeName = {}
+        LaunchFrameConfig[switchName].cookieData.TypeName.hotDaily = newEntry
+        result = LaunchFrame.RecordMainShow(switchName, LaunchFrameConfig[switchName].cookieData)
+        return result
+    else
+        -- case2.2：在调用消除红点时（num ==0），记录用户本次展示红点的cookie
+        LaunchFrameTools.ColorLogInfo(switchName, "打开红点操作，直接返回。")
+        return {ret = ret, msg = msg, rate = HotRate}
+    end
+end
+
+-- 插入红点记录
+-- 错误码：-92XX
+function LaunchFrame.RecordMainShow(switchName, cookieData)
+    local ret = 0
+    local msg = "ok"
+    LaunchFrameTools.ColorLogInfo(switchName, "[RecordMainShow（插入红点信息）]")
+    if cookieData ~= nil then
+        LaunchFrameTools.ColorLogInfo(switchName, "cookie中插入红点信息。LaunchFrame完整cookie信息：cookieData=" .. JsonManager.EncodeJson(cookieData))
+        LaunchFrameTools.SetCookieInfo(switchName, userData, cookieData)
+    else
+        ret = -9201
+        msg = "当前活动的cookieData为nil"
+        return {ret = ret, msg = msg}
+    end
+    return {ret = ret, msg = msg}
+end

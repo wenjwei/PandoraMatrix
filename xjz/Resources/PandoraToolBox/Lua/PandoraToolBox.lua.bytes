@@ -1,0 +1,11 @@
+
+local WINDOWS_EDITOR = 7;
+if UnityEngine.Application.platform == WINDOWS_EDITOR then
+  require "PandoraToolBoxMonitor";
+end
+
+local PandoraToolBoxController = require "./PandoraToolBoxController";
+local controller = PandoraToolBoxController:New();
+GlobalWrapper = controller;
+controller:Init();
+

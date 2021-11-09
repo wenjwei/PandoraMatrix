@@ -1,0 +1,89 @@
+require "Common";
+
+PandoraToolBoxSettings = { };
+local uiType = "UGUI"
+function PandoraToolBoxSettings.Init()
+    PandoraToolBoxSettings.InitApiCompatibilityLevel();
+    PandoraToolBoxSettings.InitActivityParams();
+    PandoraToolBoxSettings.InitDjcParams();
+    PandoraToolBoxSettings.InitFunctionParams();
+    PandoraToolBoxSettings.InitProtocolParams();
+    PandoraToolBoxSettings.InitVendorParams();
+end
+
+--解决Unity运行环境选择.net46时日志上传出现接口调用报错问题
+--当Untiy Build Setting中设置Scripting Runtime Version为.net46 及以上时，释放下面的注释即可
+function PandoraToolBoxSettings.InitApiCompatibilityLevel()
+    -- PandoraToolBoxSettings.apiCompatibilityLevel = "dotNet46"; 
+end
+
+function PandoraToolBoxSettings.InitActivityParams()
+    PandoraToolBoxSettings.activityName = "pandoraToolBox";
+    PandoraToolBoxSettings.UiType = PandoraToolBoxSettings.CreateEnumTable( { "UGUI", "NGUI" }, 0);
+    if uiType == "UGUI" then
+        PandoraToolBoxSettings.isActivityOpen = true;
+        PandoraToolBoxSettings.uiType = PandoraToolBoxSettings.UiType.UGUI;
+        PandoraToolBoxSettings.panelName = "PandoraToolBox_UGUI";
+    elseif uiType == "NGUI" then
+        PandoraToolBoxSettings.isActivityOpen = true;
+        PandoraToolBoxSettings.uiType = PandoraToolBoxSettings.UiType.NGUI;
+        PandoraToolBoxSettings.panelName = "PandoraToolBox_NGUI";
+    end
+end
+
+function PandoraToolBoxSettings.InitDjcParams()
+    -- 测试道具城购买参数
+    PandoraToolBoxSettings.actStyle = "10242";
+    PandoraToolBoxSettings.channelId = "10177";
+    PandoraToolBoxSettings.actionId = "8036";
+    PandoraToolBoxSettings.buyNum = "1";
+
+    -- 正式环境测试道具使用积分，因为不用走idip，免去了idip环境的问题，解决游戏测试包不能连线上服的问题(游戏使用测试环境，潘多拉 米大师，道聚城，都使用正式环境)。
+    PandoraToolBoxSettings.infoId = "1003822";
+    local isTestEnvironment = Common.GetFunctionSwitch("test");
+    if isTestEnvironment == true then
+        PandoraToolBoxSettings.infoId = "1003115";
+    end
+end
+
+function PandoraToolBoxSettings.InitFunctionParams()
+    PandoraToolBoxSettings.functionConfigLuaFileName = "./PandoraToolBoxFunctionConfig"
+    PandoraToolBoxSettings.functionConfigCookieName = "PandoraToolBoxFunctionConfig.txt"
+    -- 新增函数时，显示名称的默认值
+    PandoraToolBoxSettings.functionNameInvalidTips = "按钮名称没有填写，请填写"
+    PandoraToolBoxSettings.functionNameRepeatTips = "该按钮已经添加过，不能重复添加"
+    PandoraToolBoxSettings.functionContentInvalidTips = "被调用函数名没有填写，请填写"
+    PandoraToolBoxSettings.functionParamsInvalidTips = "该函数调用需要参数，请填写"
+    PandoraToolBoxSettings.functionEmptyParams = " ";
+    PandoraToolBoxSettings.functionEmptyDefaultParams = " "
+end
+
+function PandoraToolBoxSettings.InitProtocolParams()
+    PandoraToolBoxSettings.protocolConfigLuaFileName = "./PandoraToolBoxProtocolConfig"
+    PandoraToolBoxSettings.protocolConfigCookieName = "PandoraToolBoxProtocolConfig.txt"
+    -- 新增协议时，显示名称的默认值
+    PandoraToolBoxSettings.protocolNameInvalidTips = "按扭名没有填写，请填写"
+    PandoraToolBoxSettings.protocolContentInvalidTips = "协议内容没有填写，请填写"
+    PandoraToolBoxSettings.protocolContentFormatInvalidTips = "协议格式错误，请修正"
+    PandoraToolBoxSettings.protocolKeyRepeatTips = "协议键值重复，请修正"
+end
+
+function PandoraToolBoxSettings.InitVendorParams()
+    PandoraToolBoxSettings.vendorConfigLuaFileName = "./PandoraToolBoxVendorConfig"
+    PandoraToolBoxSettings.vendorConfigCookieName = "PandoraToolBoxVendorConfig.txt"
+    -- 新增协议时，显示名称的默认值
+    PandoraToolBoxSettings.activityNameInvalidTips = "按扭名没有填写，请填写"
+    PandoraToolBoxSettings.requestInvalidTips = "请求格式错误，非空且必须为json格式，请修正"
+    PandoraToolBoxSettings.vendorListInvalidTips = "渠道号名单格式错误，非空且必须为csv格式，请修正"
+    PandoraToolBoxSettings.activityRepeatTips = "该按钮已经添加过，不能重复添加"
+end
+
+function PandoraToolBoxSettings.CreateEnumTable(tbl, startIndex)
+    local enumTable = { };
+    local enumIndex = startIndex or 0;
+    for i, v in ipairs(tbl) do
+        enumTable[v] = enumIndex;
+        enumIndex = enumIndex + 1;
+    end
+    return enumTable;
+end

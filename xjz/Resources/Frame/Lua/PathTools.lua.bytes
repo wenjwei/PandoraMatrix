@@ -1,0 +1,90 @@
+local function at(s,i)
+    return string.sub(s,i,i)
+end
+
+local np_gen1,np_gen2 = '[^SEP]+SEP%.%.SEP?','SEP+%.?SEP'
+local np_pat1, np_pat2
+
+
+local mt = {}
+
+
+mt.sep = '/';
+
+function mt.isabs(P)
+    return at(P,1) == mt.sep
+end
+
+function mt.normpath(P)
+	if not np_pat1 then
+        np_pat1 = np_gen1:gsub('SEP',mt.sep)
+        np_pat2 = np_gen2:gsub('SEP',mt.sep)
+    end
+	
+    local k
+    repeat -- /./ -> /
+        P,k = P:gsub(np_pat2,mt.sep)
+    until k == 0
+    repeat -- A/../ -> (empty)
+        P,k = P:gsub(np_pat1,'')
+    until k == 0
+    if P == '' then P = '.' end
+    return P
+end
+
+function mt.join(p1,p2,...)
+    if select('#',...) > 0 then
+        local p = mt.join(p1,p2)
+        local args = {...}
+        for i = 1,#args do
+            p = mt.join(p,args[i])
+        end
+        return p
+    end
+    if mt.isabs(p2) then return p2 end
+    local endc = at(p1,#p1)
+    if endc ~= mt.sep  then
+        p1 = p1..mt.sep
+    end
+    return p1..p2
+end
+
+
+function mt.abspath(P,pwd)
+    P = P:gsub('[\\/]$','')
+    if not mt.isabs(P) then
+        P = mt.join(pwd,P)
+    end
+    return mt.normpath(P)
+end
+
+function mt.currentpath (P)
+    local ActionName = string.match(P,"Assets/Actions/Resources/(%w+)/Lua/")
+    local sI,eI=string.find(P,"Assets/Actions/Resources/"..ActionName .. "/Lua/")
+    local localPath = string.sub(P,eI+1);
+    --Logger.DEBUG("localPath 1: " .. localPath)
+    --Logger.DEBUG("localPath 2: " .. tostring(string.match(localPath,"(.+)/[^/]*%.%w+$")))
+    return string.match(localPath,"(.+)/[^/]*%.%w+$") or "";
+end
+
+function mt.actionname (P)
+    return string.match(P,"Assets/Actions/Resources/(%w+)/Lua/")
+end
+
+
+function mt.strippath(path)
+    return string.match(path, ".+/([^/]*%.%w+)$") 
+end
+
+function mt.stripextension(filename)
+	local idx = filename:match(".+()%.%w+$")
+	if(idx) then
+		return filename:sub(1, idx-1)
+	else
+		return filename
+	end
+end
+
+
+
+return mt;

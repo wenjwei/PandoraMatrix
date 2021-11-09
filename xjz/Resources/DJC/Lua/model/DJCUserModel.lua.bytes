@@ -1,0 +1,118 @@
+--------------------------------------------------------- START -------------------------------------------------------
+-- 用户 Model，用于存储和用户相关的信息，包括登录态、头像、昵称等
+-- 该文件默认包含 API 如下：
+-- @method GetAppId                : 获取游戏 AppId
+-- @method GetOpenId               : 获取 openid 或 gopenid
+-- @method GetArea                 : 获取玩家角色所在大区
+-- @method GetPlatId               : 获取玩家角色所在平台 —— iOS/Android
+-- @method GetPartition            : 获取玩家角色所在小区(服)
+-- @method GetRoleId               : 获取玩家角色 ID
+-- @method GetAccessToken          : 获取 AccessToken
+-- @method GetAccType              : 获取帐号类型
+-- ...
+---------------------------------------------------------- END --------------------------------------------------------
+require "Common"
+--local CSharpInterface = com.tencent.pandora.CSharpInterface
+local DJCCSharpInterface = com.tencent.pandora.CSharpInterface
+local UserModel = {}
+UserModel.tbUserData = Common.GetUserData()
+
+-----------------------------------------------------------------------------
+-- desc 获取游戏 AppId，根据业务特殊性，自行处理
+-- @return string 游戏 AppId
+-----------------------------------------------------------------------------
+function UserModel.GetAppId()
+    return UserModel.tbUserData.sAppId
+end
+
+-----------------------------------------------------------------------------
+-- desc 获取游戏 AppId，根据业务特殊性，自行处理
+-- @return string 游戏 AppId
+-----------------------------------------------------------------------------
+function UserModel.GetGameId()
+    return UserModel.tbUserData.sMSDKGameID
+end
+
+-----------------------------------------------------------------------------
+-- desc 获取 openid 或 gopenid，根据帐号体系，自行处理
+-- @return string 玩家的 openid 或者 gopenid
+-----------------------------------------------------------------------------
+function UserModel.GetOpenId()
+    return UserModel.tbUserData.sOpenId
+end
+
+-----------------------------------------------------------------------------
+-- desc 玩家角色所在大区，根据业务特殊性，自行处理
+-- @return string 玩家角色所在大区
+-----------------------------------------------------------------------------
+function UserModel.GetArea()
+    --return "991"
+    return UserModel.tbUserData.sArea
+    --这里不要用tbUserData的areaid
+end
+
+-----------------------------------------------------------------------------
+-- desc 获取玩家角色所在平台 —— iOS/Android，根据业务特殊性，自行处理
+-- @return string 玩家角色所在平台
+-----------------------------------------------------------------------------
+function UserModel.GetPlatId()
+    return UserModel.tbUserData.sPlatID
+end
+
+-----------------------------------------------------------------------------
+-- desc 获取玩家角色所在小区(服)，根据业务特殊性，自行处理
+-- @return string 玩家角色所在小区(服)
+-----------------------------------------------------------------------------
+function UserModel.GetPartition()
+    return UserModel.tbUserData.sPartition
+end
+
+-----------------------------------------------------------------------------
+-- desc 获取玩家角色 ID，根据业务特殊性，自行处理
+-- @return string 玩家角色 ID
+-----------------------------------------------------------------------------
+function UserModel.GetRoleId()
+    return UserModel.tbUserData.sRoleId
+end
+
+-----------------------------------------------------------------------------
+-- desc 获取玩家 PayToken，根据业务特殊性，自行处理
+-- @return string 玩家 PayToken
+-----------------------------------------------------------------------------
+function UserModel.GetPayToken()
+    return UserModel.tbUserData.sPayToken
+end
+
+-----------------------------------------------------------------------------
+-- desc 获取玩家 AccessToken，根据业务特殊性，自行处理
+-- @return string 玩家 AccessToken
+-----------------------------------------------------------------------------
+function UserModel.GetAccessToken()
+    return UserModel.tbUserData.sAccessToken
+end
+
+-----------------------------------------------------------------------------
+-- desc 获取玩家帐号类型，根据业务特殊性，自行处理
+-- @return string 玩家帐号类型
+-----------------------------------------------------------------------------
+function UserModel.GetAccType()
+    return UserModel.tbUserData.sAcountType
+end
+-----------------------------------------------------------------------------
+-- desc 获取用户唯一uniqueroleid
+-- @return string 玩家uniqueroleid
+-----------------------------------------------------------------------------
+function UserModel.GetUniqueRuleId()
+    return UserModel.tbUserData.sUniqueRoleId
+end
+
+-----------------------------------------------------------------------------
+-- desc 刷新玩家 Tokens，根据业务特殊性，自行处理
+-----------------------------------------------------------------------------
+function UserModel.RefreshUserTokens()
+    DJCCSharpInterface.RefreshUserDataTokens()
+    --CSharpInterface.RefreshUserDataTokens() -- 刷新用户 Tokens
+    UserModel.tbUserData = Common.GetUserData()
+end
+
+return UserModel

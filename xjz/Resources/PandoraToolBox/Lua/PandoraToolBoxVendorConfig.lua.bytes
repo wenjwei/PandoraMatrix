@@ -1,0 +1,11 @@
+PandoraToolBoxConfig{
+	["request"] = {
+		["示例"] = "{\"body\":{\"check_visibility_field\":{\"vender\":\"1001\"},\"md5_val\":\"1557238936\"},\"head\":{\"msg_type\":\"1\",\"patition_id\":\"9002\",\"role_id\":\"197032483697464333\",\"cmd_id\":\"10000\",\"area_id\":\"2\",\"channel_id\":\"10419\",\"sdk_version\":\"WMSJ-Android-002\",\"access_token\":\"3DCEFA7F5A3FABCC4C7AB587B4ACEF90\",\"open_id\":\"1CCAFA9716EF5085B1E99324BF8BCAD0_\",\"game_app_id\":\"1106698064\",\"game_env\":\"1\",\"info_id\":\"1006277\",\"act_style\":\"10608\",\"plat_id\":\"1\",\"timestamp\":1557238936,\"acc_type\":\"qq\",\"seq_id\":\"1\"}}"
+	},
+	["vendorList"] = {
+		["示例"] = {
+			["blackList"] = "2018,pass,\n2017,fail,\n",
+			["whiteList"] = "1001,pass,\n1002,fail,\n"
+		}
+	}
+}

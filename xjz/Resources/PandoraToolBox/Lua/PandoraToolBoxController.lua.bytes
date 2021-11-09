@@ -1,0 +1,477 @@
+require "Common"
+require "JsonManager"
+require "EventDispatcher"
+require "./PandoraToolBoxRequestAssembler"
+require "./PandoraToolBoxSettings"
+
+require "./PandoraToolBoxMessageToGame"
+require "./PandoraToolBoxHelperTools"
+require "./PandoraToolBoxFunctionManager"
+require "./PandoraToolBoxProtocolManager"
+require "./PandoraToolBoxVendorManager"
+require "./PandoraToolBoxResponseParser"
+require "./PandoraToolBoxPresetFunctions"
+
+require "./PandoraToolBoxLogger";
+
+local Logger = Common.GetLogger()
+local PandoraToolBoxPanel = require "./PandoraToolBoxPanel"
+local MAX_LENGTH_OF_TEXT_SHOW = 16249 --Mesh can not have more than 65000 vertices,16249 = 65000/4 - 1
+
+local mt = {}
+
+function mt:New()
+    local o = {}
+    setmetatable(o, self)
+    self.__index = self
+    return o
+end
+function mt:Init()
+    if Common.GetTotalSwitch() == false then
+        Common.Report("潘多拉总开关关闭", 0, 0)
+        return
+    end
+    PandoraToolBoxSettings.Init()
+    -- 因为要在settings中根据开关判断ui类型和panel名字，所以把开关是否打开也放在那判断
+    if PandoraToolBoxSettings.isActivityOpen ~= true then
+        Logger.DEBUG("pandoraToolBox开关关闭")
+        Common.Report("pandoraToolBox开关关闭", 0, 0)
+        return
+    end
+    EventDispatcher.AddEventListener(Common.GAME_COMMAND, self.HandleGameCmd, self)
+
+    -- ready消息
+    PandoraToolBoxMessageToGame.Ready(PandoraToolBoxSettings.activityName, true)
+
+    local function OpenPandoraToolBoxPanel()
+        local openCommand = {}
+        openCommand.type = "open"
+        openCommand.content = PandoraToolBoxSettings.activityName
+        self:HandleGameCmd(JsonManager.EncodeJson(openCommand))
+    end
+    LuaTimer.Add(2 * 1000, OpenPandoraToolBoxPanel)
+    self:PrintFrameLog()
+    self:PrintToolBoxLog()
+end
+
+function mt:HandleGameCmd(jsonCmd)
+    Common.TablePrinter(jsonCmd, "HandleGameCmd")
+    local tableCmd = JsonManager.DecodeJson(jsonCmd)
+    if tableCmd == nil then
+        Logger.ERROR("PandoraToolBoxController.HandleGameCmd() parameter is error: " .. tostring(jsonCmd))
+        return
+    end
+
+    if tableCmd.type == "open" and tableCmd.content == PandoraToolBoxSettings.activityName then
+        if self.gameObject == nil then
+            Common.CreatePanel(PandoraToolBoxSettings.panelName, self.OnCreate, self)
+        else
+            self.gameObject:SetActive(true)
+        end
+        return
+    end
+
+    if tableCmd.type == "close" and tableCmd.content == PandoraToolBoxSettings.activityName then
+        if self.gameObject ~= nil then
+            self:DestroyPanel()
+        end
+        return
+    end
+
+    if tableCmd.type == "panelDestroy" and tableCmd.content == PandoraToolBoxSettings.panelName then
+        if self.destroyByPandora then
+            self.destroyByPandora = false
+            return
+        end
+        self:OnAbnoramlDestroy()
+        return
+    end
+end
+
+function mt:PrintFrameLog()
+    Logger.DEBUG("DEBUG: ".." Frame ","frame")
+    Logger.INFO("INFO: ".." Frame","frame")
+    Logger.WARN("WARN: ".." Frame","frame")
+    Logger.ERROR("ERROR: ".." Frame","frame")
+end
+
+function mt:PrintToolBoxLog()
+    Logger.DEBUG("DEBUG: ".." 测试工具 ","1088878")
+    Logger.INFO("INFO: ".." 测试工具","1088878")
+    Logger.WARN("WARN: ".." 测试工具","1088878")
+    Logger.ERROR("ERROR: ".." 测试工具","1088878")
+
+    Logger.DEBUG("DEBUG: ".." 测试资源校验开关 ","1088878")
+end
+
+function mt:OnCreate(obj)
+    self.gameObject = obj
+    self.panel = PandoraToolBoxPanel:New()
+    self.panel:Init(self.gameObject)
+    self:AddEventListeners()
+    PandoraToolBoxFunctionManager.Init(self.panel)
+    PandoraToolBoxProtocolManager.Init(self.panel)
+    if Common.GetFunctionSwitch("pandoraToolBox_NGUI") then
+        PandoraToolBoxVendorManager.Init(self.panel)
+    end
+    PandoraToolBoxHelperTools.Init(self.panel)
+    PandoraToolBoxMessageToGame.Created(PandoraToolBoxSettings.activityName)
+end
+
+function mt:AddEventListeners()
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.UGUI then
+        self:AddEventListenersUGUI()
+        return
+    end
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        self:AddEventListenersNGUI()
+        return
+    end
+end
+
+function mt:AddEventListenersUGUI()
+    -- 采用event 和function字典形式存储
+    self.eventFunctionMap = {}
+    -- 界面显隐
+    self.eventFunctionMap[self.panel.openPanelButton:GetComponent("DraggableButton").onClick] = function()
+        self:DisplayPanel()
+    end
+    self.eventFunctionMap[self.panel.openPanelButton:GetComponent("DraggableButton").onDrag] = function(delta)
+        self:MoveEntranceButton(self.panel.openPanelButton, delta)
+    end
+    -- close按钮
+    self.eventFunctionMap[self.panel.closeButton:GetComponent("Button").onClick] = function()
+        self:HidePanel()
+    end
+    -- 主按钮
+    self.eventFunctionMap[self.panel.logAreaButton:GetComponent("Button").onClick] = function()
+        self:DisplayArea(self.panel.logAreaButton)
+    end
+    self.eventFunctionMap[self.panel.logSearchAreaButton:GetComponent("Button").onClick] = function()
+        self:DisplayArea(self.panel.logSearchAreaButton)
+    end
+    self.eventFunctionMap[self.panel.functionAreaButton:GetComponent("Button").onClick] = function()
+        self:DisplayArea(self.panel.functionAreaButton)
+    end
+    self.eventFunctionMap[self.panel.protocolAreaButton:GetComponent("Button").onClick] = function()
+        self:DisplayArea(self.panel.protocolAreaButton)
+    end
+    -- logArea
+    self.eventFunctionMap[self.panel.refreshLogButton:GetComponent("Button").onClick] = function()
+        self:RefreshLog()
+    end
+    self.eventFunctionMap[self.panel.clearLogButton:GetComponent("Button").onClick] = function()
+        self:ClearLog()
+    end
+    -- log检索区
+    self.eventFunctionMap[self.panel.searchButton:GetComponent("Button").onClick] = function()
+        self:SearchLog()
+    end
+    self.eventFunctionMap[self.panel.searchResultGameObject:GetComponent("Button").onClick] = function()
+        self:HideSearchResultScrollView()
+    end
+    -- 函数区
+    self.eventFunctionMap[self.panel.addFunctionButton:GetComponent("Button").onClick] =
+        PandoraToolBoxFunctionManager.AddFunction
+    self.eventFunctionMap[self.panel.executeFunctionButton:GetComponent("Button").onClick] =
+        PandoraToolBoxFunctionManager.ExecuteFunction
+    -- 协议区
+    self.eventFunctionMap[self.panel.addProtocolButton:GetComponent("Button").onClick] =
+        PandoraToolBoxProtocolManager.AddProtocol
+    self.eventFunctionMap[self.panel.executeProtocolButton:GetComponent("Button").onClick] =
+        PandoraToolBoxProtocolManager.ExecuteProtocol
+    -- 提示框
+    self.eventFunctionMap[self.panel.commonTipsCloseButton:GetComponent("Button").onClick] =
+        PandoraToolBoxHelperTools.HideCommonTips
+
+    for event, response in pairs(self.eventFunctionMap) do
+        event:AddListener(response)
+    end
+end
+
+function mt:AddEventListenersNGUI()
+    -- onClick onDrag 属性只能被赋值，不能获取用来作为键值（property onClick is write only）
+    UIEventListener.Get(self.panel.openPanelButton).onDrag = function(go, delta)
+        self:MoveEntranceButton(go, delta)
+    end
+    self.buttonFunctionMap = {}
+    self.buttonFunctionMap[self.panel.openPanelButton] = function(go)
+        self:DisplayPanel(go)
+    end
+    self.buttonFunctionMap[self.panel.closeButton] = function(go)
+        self:HidePanel(go)
+    end
+    -- 主按钮
+    self.buttonFunctionMap[self.panel.logAreaButton] = function(go)
+        self:DisplayArea(go)
+    end
+    self.buttonFunctionMap[self.panel.logSearchAreaButton] = function(go)
+        self:DisplayArea(go)
+    end
+    self.buttonFunctionMap[self.panel.functionAreaButton] = function(go)
+        self:DisplayArea(go)
+    end
+    self.buttonFunctionMap[self.panel.protocolAreaButton] = function(go)
+        self:DisplayArea(go)
+    end
+    self.buttonFunctionMap[self.panel.vendorAreaButton] = function(go)
+        self:DisplayArea(go)
+    end
+    -- logArea
+    self.buttonFunctionMap[self.panel.refreshLogButton] = function(go)
+        self:RefreshLog(go)
+    end
+    self.buttonFunctionMap[self.panel.clearLogButton] = function(go)
+        self:ClearLog(go)
+    end
+    -- log检索区
+    self.buttonFunctionMap[self.panel.searchButton] = function(go)
+        self:SearchLog(go)
+    end
+    self.buttonFunctionMap[self.panel.searchResultGameObject] = function(go)
+        self:HideSearchResultScrollView(go)
+    end
+    -- 函数区
+    self.buttonFunctionMap[self.panel.addFunctionButton] = PandoraToolBoxFunctionManager.AddFunction
+    self.buttonFunctionMap[self.panel.executeFunctionButton] = PandoraToolBoxFunctionManager.ExecuteFunction
+    -- 协议区
+    self.buttonFunctionMap[self.panel.addProtocolButton] = PandoraToolBoxProtocolManager.AddProtocol
+    self.buttonFunctionMap[self.panel.executeProtocolButton] = PandoraToolBoxProtocolManager.ExecuteProtocol
+    --渠道号区
+    self.buttonFunctionMap[self.panel.addActivityButton] = PandoraToolBoxVendorManager.AddActivity
+    self.buttonFunctionMap[self.panel.testButton] = PandoraToolBoxVendorManager.ExecuteTest
+    -- 提示框
+    self.buttonFunctionMap[self.panel.commonTipsCloseButton] = PandoraToolBoxHelperTools.HideCommonTips
+
+    for button, response in pairs(self.buttonFunctionMap) do
+        UIEventListener.Get(button).onClick = response
+    end
+end
+
+function mt:RemoveEventListeners()
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.UGUI then
+        self:RemoveEventListenersUGUI()
+        return
+    end
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        self:RemoveEventListenersNGUI()
+        return
+    end
+end
+
+function mt:RemoveEventListenersUGUI()
+    if self.destroyByPandora == false then
+        self.eventFunctionMap = {}
+        return
+    end
+
+    for event, response in pairs(self.eventFunctionMap) do
+        event:RemoveListener(response)
+    end
+    self.eventFunctionMap = {}
+end
+
+function mt:RemoveEventListenersNGUI()
+    if self.destroyByPandora == false then
+        self.buttonFunctionMap = {}
+        return
+    end
+
+    UIEventListener.Get(self.panel.openPanelButton).onDrag = nil
+    for button, response in pairs(self.buttonFunctionMap) do
+        UIEventListener.Get(button).onClick = nil
+    end
+    self.buttonFunctionMap = {}
+end
+
+function mt:DisplayPanel(go)
+    self.panel.openPanelButton:SetActive(false)
+    self.panel.panelRoot:SetActive(true)
+end
+
+function mt:MoveEntranceButton(go, delta)
+    local priviousPosition = go.transform.localPosition
+    local currentPosition =
+        UnityEngine.Vector3(priviousPosition.x + delta.x, priviousPosition.y + delta.y, priviousPosition.z)
+    go.transform.localPosition = currentPosition
+end
+
+function mt:DisplayArea(go)
+    self.panel.logArea:SetActive(false)
+    self.panel.searchLogArea:SetActive(false)
+    self.panel.functionArea:SetActive(false)
+    self.panel.protocolArea:SetActive(false)
+    if Common.GetFunctionSwitch("pandoraToolBox_NGUI") then
+        self.panel.vendorArea:SetActive(false)
+    end
+    if go == self.panel.logAreaButton then
+        self.panel.logArea:SetActive(true)
+        return
+    end
+    if go == self.panel.logSearchAreaButton then
+        self.panel.searchLogArea:SetActive(true)
+        return
+    end
+    if go == self.panel.functionAreaButton then
+        self.panel.functionArea:SetActive(true)
+        return
+    end
+    if go == self.panel.protocolAreaButton then
+        self.panel.protocolArea:SetActive(true)
+        return
+    end
+    if go == self.panel.vendorAreaButton then
+        self.panel.vendorArea:SetActive(true)
+        return
+    end
+end
+
+function mt:RefreshLog(go)
+    local message = table.concat(Logger.message, "\n")
+    local messageLength = string.len(message)
+    if messageLength > MAX_LENGTH_OF_TEXT_SHOW then
+        message = string.sub(message, messageLength - MAX_LENGTH_OF_TEXT_SHOW + 1)
+    end
+    self.panel.logLabel.text = message
+end
+
+function mt:ClearLog(go)
+    Logger.Clear()
+    self.panel.logLabel.text = ""
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        self:ResetLogAreaPosition()
+    end
+end
+
+-- 把颜色格式去掉是因为防止复制日志文本时带格式
+function mt:SearchLog(go)
+    local searchContent
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.UGUI then
+        searchContent = self.panel.searchKeyWord.text
+    end
+
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        searchContent = self.panel.searchKeyWord.value
+        self:ResetSearchedLogScrollviewPosition()
+    end
+    -- 校验输入项
+    searchContent = string.lower(PandoraToolBoxHelperTools.TrimSpace(searchContent))
+    local searchedLogTable = {}
+    local lowerValue
+    local unformattedValue
+    for index, value in ipairs(Logger.message) do
+        lowerValue = string.lower(value)
+        if string.find(lowerValue, searchContent) then
+            unformattedValue = self:GetUnformattedValue(value)
+            table.insert(searchedLogTable, unformattedValue)
+        end
+    end
+
+    local message = table.concat(searchedLogTable, "\n")
+    self.panel.searchResult.text = message
+    self:SetLogCopyAreaContent(message)
+    self:DisplaySearchResultScrollView()
+end
+
+-- 只用于ngui
+function mt:ResetLogAreaPosition()
+    self.panel.logAreaScrollView:ResetPosition()
+end
+
+function mt:ResetSearchedLogScrollviewPosition()
+    self.panel.searchResultScrollView:GetComponent("UIScrollView"):ResetPosition()
+end
+
+function mt:GetUnformattedValue(value)
+    local unformattedValue = value
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.UGUI then
+        if string.find(value, "<") then
+            unformattedValue = string.match(value, "^%<.+%>(.-)%<.+%>$")
+        end
+    end
+
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        unformattedValue = string.match(value, "^%[%w+%](.-)%[%-%]$")
+    end
+    return unformattedValue
+end
+
+function mt:SetLogCopyAreaContent(message)
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.UGUI then
+        self.panel.searchResultCopyArea.text = message
+    end
+
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        self.panel.searchResultCopyArea.value = message
+    end
+end
+
+function mt:DisplaySearchResultScrollView()
+    self.panel.searchResultScrollView:SetActive(true)
+    self.panel.searchResultCopyPanel:SetActive(false)
+end
+
+function mt:HideSearchResultScrollView(go)
+    self.panel.searchResultScrollView:SetActive(false)
+    self.panel.searchResultCopyPanel:SetActive(true)
+end
+
+function mt:HidePanel(go)
+    self.panel.openPanelButton:SetActive(true)
+    self.panel.panelRoot:SetActive(false)
+end
+
+function mt:DestroyPanel()
+    Logger.Clear()
+    self.destroyByPandora = true
+    self:RemoveEventListeners()
+    Common.DestroyPanel(PandoraToolBoxSettings.panelName)
+    self.panel:OnDestroy()
+    self.panel = nil
+    PandoraToolBoxFunctionManager.Clear()
+    PandoraToolBoxProtocolManager.Clear()
+    PandoraToolBoxVendorManager.Clear()
+    PandoraToolBoxHelperTools.Clear()
+    self.gameObject = nil
+    Common.UnloadUnusedAssets()
+end
+
+-- 游戏异常关闭pandora处理
+function mt:OnAbnoramlDestroy()
+    Logger.WARN("异常销毁")
+    Logger.Clear()
+    self.destroyByPandora = false
+    self:RemoveEventListeners()
+    Common.DestroyPanel(PandoraToolBoxSettings.panelName)
+    self.panel:OnDestroy()
+    self.panel = nil
+    PandoraToolBoxFunctionManager.Clear()
+    PandoraToolBoxProtocolManager.Clear()
+    PandoraToolBoxHelperTools.Clear()
+    self.gameObject = nil
+    Common.UnloadUnusedAssets()
+end
+
+-- region 示例：使用面向对象的形式定义被测试工具调用函数
+-- 在工具中调用带参函数时，传入的第一个参数会被作为self参数，所以参数要做处理
+function mt:TestFuncWithParams(param1, param2)
+    -- 判断是否为被测试工具调用，如果是，则处理参数
+    if self ~= GlobalWrapper then
+        Logger.DEBUG("被测试工具调用")
+        param2 = param1
+        param1 = self
+        self = GlobalWrapper
+    end
+    Logger.DEBUG(string.format("self:%s,param1:%s,param2:%s", tostring(self), tostring(param1), tostring(param2)))
+end
+
+function mt:TestFuncWithoutParams()
+    -- 判断是否为被测试工具调用，如果是，则处理参数
+    if self ~= GlobalWrapper then
+        Logger.DEBUG("被测试工具调用")
+        self = GlobalWrapper
+    end
+end
+-- endregion
+
+return mt

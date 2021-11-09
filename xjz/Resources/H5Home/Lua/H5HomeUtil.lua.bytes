@@ -1,0 +1,323 @@
+require "Common"
+require "JsonManager"
+
+local H5HomeUtil = {}
+local userData = Common.GetUserData()
+local cookieFile = "xzj_H5Home_" .. userData.sRoleId .. ".txt"
+
+function H5HomeUtil.GetRequestJson(ActStyle, ChannelId)
+	local header = {}
+	header["seq_id"]   = "1"
+	header["msg_type"] = "1"
+	header["cmd_id"]   = "10000"
+	header["area_id"]     = userData.sArea
+	header["game_app_id"] = userData.sAppId
+	header["plat_id"]     = userData.sPlatID
+	header["open_id"]     = userData.sOpenId
+	header["role_id"]     = userData.sRoleId
+	header["patition_id"] = userData.sPartition
+	header["sdk_version"] = userData.sSdkVersion
+    header["timestamp"]  = os.time()
+	header["act_style"]  = tostring(ActStyle)
+	header["channel_id"] = tostring(ChannelId)
+
+	local body = {}
+	body["md5_val"] = ""
+	body["gameappversion"] = userData.sGameVer
+
+	local request = {}
+	request["head"] = header
+    request["body"] = body
+
+	return JsonManager.EncodeJson(request)
+end
+
+function H5HomeUtil.ParseResponse(response)
+    local outer = JsonManager.DecodeJson(response)
+    if not outer or not outer.resp then
+        return nil
+    end
+    if tonumber(outer.ret) ~= 0 then
+        return nil
+    end
+
+    local inner = JsonManager.DecodeJson(outer.resp)
+    if not inner.body then
+        return nil
+    end
+    if tonumber(inner.body.ret) ~= 0 then
+        return nil
+    end
+
+    local msgInfo = inner.body.online_msg_info
+    if not msgInfo then
+        return nil
+    end
+    if tonumber(msgInfo["act_num"]) == 0 then
+        return nil
+    end
+
+    return msgInfo["act_list"]
+end
+
+function H5HomeUtil.CheckActionInfo(actData)
+    local newData = {}
+    if not actData or type(actData) ~= "table" then
+        return false
+    end
+
+    local infoId = H5HomeUtil.GetinfoId(actData)
+    if not infoId then
+        return false
+    else
+        newData.infoId = infoId
+    end
+
+    local moduleValue = H5HomeUtil.GetModuleValue(actData)
+    if not moduleValue then
+        return false
+    else
+        newData.moduleValue = moduleValue
+    end
+
+    local tabValue = H5HomeUtil.GetTabValue(actData)
+    if not tabValue then
+        return false
+    else
+        newData.tabValue = tabValue
+    end
+
+    local tagValue = H5HomeUtil.GetTagValue(actData)
+    if not tagValue then
+        return false
+    else
+        newData.tagValue = tagValue
+    end
+
+    local sortIdValue = H5HomeUtil.GetSortIdValue(actData)
+    if not sortIdValue then
+        return false
+    else
+        newData.sortIdValue = sortIdValue
+    end
+
+    local showNameValue = H5HomeUtil.GetShowNameValue(actData)
+    if not showNameValue then
+        return false
+    else
+        newData.showNameValue = showNameValue
+    end
+
+    local targetUrlValue = H5HomeUtil.GetTargetUrlValue(actData)
+    if not targetUrlValue then
+        return false
+    else
+        newData.targetUrlValue = targetUrlValue
+    end
+
+    local countdownValue = H5HomeUtil.GetCountdownValue(actData)
+    if not countdownValue then
+        return false
+    else
+        newData.countdownValue = countdownValue
+    end
+
+    local jumpType = H5HomeUtil.GetJumpType(actData)
+    if not jumpType then
+        return false
+    else
+        newData.jumpType = jumpType
+    end
+
+    local jumpValue = H5HomeUtil.GetJumpValue(actData)
+    if not jumpValue then
+        return false
+    else
+        newData.jumpValue = jumpValue
+    end
+
+    local redpointValue = H5HomeUtil.GetRedpointValue(actData)
+    if not redpointValue then
+        return false
+    else
+        newData.redpointValue = redpointValue
+    end
+    
+    return newData
+end
+
+function H5HomeUtil.GetinfoId(actData)
+    if not actData or not actData["info_id"] then
+        return nil
+    end
+    return actData["info_id"]
+end
+
+function H5HomeUtil.GetTabValue(actData)
+    if not actData or not actData["info_id"] then
+        return nil
+    end
+    return "H5Home_" .. actData["info_id"]
+end
+
+function H5HomeUtil.GetModuleValue(actData)
+    if not actData or not actData["moduleValue"] then
+        return nil
+    end
+    if tostring(actData["moduleValue"]) == "0" then
+        return "gameTab"
+    end
+    if tostring(actData["moduleValue"]) == "1" then
+        return "pandoraTab"
+    end
+end
+
+function H5HomeUtil.GetJumpType(actData)
+    if not actData or not actData["jumpValue"] then
+        return nil
+    end
+    if tostring(actData["jumpValue"]) == "1" then
+        return "URL"
+    end
+    if tostring(actData["jumpValue"]) == "2" then
+        return "GAME"
+    end
+    if tostring(actData["jumpValue"]) == "3" then
+        return "PANDORA"
+    end
+end
+
+function H5HomeUtil.GetJumpValue(actData)
+    if not actData or not actData["jumpTarget"] then
+        return nil
+    end
+    return actData["jumpTarget"]
+end
+
+function H5HomeUtil.GetTargetUrlValue(actData)
+    if not actData or not actData["targetUrlValue"] then
+        return nil
+    end
+    return JsonManager.DecodeJson(actData["targetUrlValue"])["url"]
+end
+
+function H5HomeUtil.GetTagValue(actData)
+    if not actData or not actData["moduleValue"] then
+        return nil
+    end
+    if tostring(actData["moduleValue"]) == "0" then
+        local tagValue = tostring(actData["tagValue1"])
+        if tagValue == "1" then
+            return "抢购"
+        end
+        if tagValue == "2" then
+            return "紧急"
+        end
+        if tagValue == "3" then
+            return "活动"
+        end
+        if tagValue == "4" then
+            return "公告"
+        end
+    end
+    if tostring(actData["moduleValue"]) == "1" then
+        local tagValue = tostring(actData["tagValue2"])
+        if tagValue == "1" then
+            return "福利"
+        end
+        if tagValue == "2" then
+            return "公告"
+        end
+        if tagValue == "3" then
+            return "回流"
+        end
+        if tagValue == "4" then
+            return "火爆"
+        end
+        if tagValue == "5" then
+            return "全新"
+        end
+        if tagValue == "6" then
+            return "推荐"
+        end
+    end
+    return ""
+end
+
+function H5HomeUtil.GetSortIdValue(actData)
+    if not actData then
+        return nil
+    end
+    if not actData["sortIdValue"] then
+        return "0"
+    else
+        return actData["sortIdValue"]
+    end
+end
+
+function H5HomeUtil.GetShowNameValue(actData)
+    if not actData then
+        return nil
+    end
+    if not actData["showNameValue"] then
+        return "测试活动"
+    else
+        return actData["showNameValue"]
+    end
+end
+
+function H5HomeUtil.GetCountdownValue(actData)
+    if not actData then
+        return nil
+    end
+    if not actData["countdownValue"] then
+        return "-1"
+    else
+        return actData["countdownValue"]
+    end
+end
+
+function H5HomeUtil.GetRedpointValue(actData)
+    if not actData or not actData["info_id"] then
+        return nil
+    end
+    if not actData.redpointValue then
+        return 0
+    end
+    if tonumber(actData.redpointValue) == 0 then
+        return 1
+    end
+
+    local nowDate = os.date("%Y%m%d")
+    local tbActKey = "act_" .. actData["info_id"]
+    local jsParams = Common.ReadCookie(cookieFile)
+    local tbParams = JsonManager.DecodeJson(jsParams)
+    if not jsParams or not tbParams then
+        tbParams = {}
+    end
+    if not tbParams[tbActKey] then
+        tbParams[tbActKey] = {}
+        tbParams[tbActKey].showNumb = 0
+        tbParams[tbActKey].lastTime = nowDate
+    end
+    if tbParams[tbActKey].lastTime ~= nowDate then
+        tbParams[tbActKey] = {}
+        tbParams[tbActKey].showNumb = 1
+        tbParams[tbActKey].lastTime = nowDate
+    else
+        tbParams[tbActKey].showNumb = tbParams[tbActKey].showNumb + 1
+    end
+
+    local ret = 0
+    local configNumb = actData["redpointCount"]
+    local cookieNumb = tbParams[tbActKey].showNumb
+    if tonumber(configNumb) < tonumber(cookieNumb) then
+        ret = 0
+    else
+        ret = 1
+    end
+    Common.WriteCookie(cookieFile, JsonManager.EncodeJson(tbParams))
+    return ret
+end
+
+return H5HomeUtil

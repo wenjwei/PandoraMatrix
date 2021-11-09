@@ -1,0 +1,570 @@
+--------------------------------------------------------- START -------------------------------------------------------
+-- 统一封装的工具方法
+-- 本文件包含的 API 如下：
+-- @method Error                   : 打日志（error 级别）
+-- @method Log                     : 打日志（debug 级别）
+-- @method JEncode                 : table 数据序列化
+-- @method JDecode                 : string 数据反序列化
+-- @method PrintTb                 : 打印  table
+-- @method Split                   : 分割字符串
+-- @method ProcessContent          : 处理过滤一些特殊字符（如富文本标签）
+-- @method EncodeURI               : uri 编码
+-- @method DecodeURI               : uri 解码
+-- @method DeepCopy                : table 深拷贝
+-- @method TransHttpToHttps        : http 协议转 https
+-- @method FormatTime              : 格式化时间
+-- @method Report                  : 通用上报方法
+-- @method ReportWithInfoId        : 通用上报备用方法
+-- @method GetCookieInfo           : 读取 cookie 信息
+-- @method SetCookieInfo           : 设置 cookie 信息
+-- @method GetRedDotNumPerDay      : 获取每日红点（每日一次类需求）
+-- @method SetRedDotNumPerDay      : 设置每日红点（每日一次类需求）
+-- ...
+---------------------------------------------------------- END --------------------------------------------------------
+require "Common"
+require "StringTool"
+
+local Util = {}
+local Logger = Common.GetLogger()
+local Configs = require "DJCConfigs"
+local UserModel = require "DJCUserModel"
+local isDebug = com.tencent.pandora.CSharpInterface.IsDebug()
+
+function Util:New(cfg)
+    local o = {}
+    setmetatable(o, self)
+    self.__index = self
+    o.cfg = cfg
+    return o
+end
+-----------------------------------------------------------------------------
+--------------------------------- 日志 --------------------------------------
+-----------------------------------------------------------------------------
+-----------------------------------------------------------------------------
+-- desc 打日志(error 级别)
+-- @param sMsg         : string 日志内容
+-----------------------------------------------------------------------------
+function Util.Error(sMsg)
+    if "string" ~= type(sMsg) then
+        Logger.ERROR("Not A String.")
+        return
+    end
+
+    Logger.ERROR(Configs.OTHER.ERROR_PRE .. sMsg .. "\n" .. debug.traceback())
+    return
+end
+
+-----------------------------------------------------------------------------
+-- desc 打日志(debug 级别)
+-- @param sMsg         : string 日志内容
+-- @param useSdkMethod : bool 是否使用潘多拉 sdk 原生方法
+-----------------------------------------------------------------------------
+function Util.Log(sMsg, useSdkMethod)
+    if isDebug then
+        if "string" ~= type(sMsg) then
+            Logger.ERROR("Not A String.")
+            return
+        end
+
+        if useSdkMethod then
+            Logger.DEBUG(Configs.OTHER.DEBUG_PRE .. sMsg)
+            return
+        end
+
+        local tbDebugInfo = debug.getinfo(2, "nSl")
+        if tbDebugInfo and tbDebugInfo.source and tbDebugInfo.currentline then
+            local sFileName = tbDebugInfo.source:match("^.+/(.+)$"):sub(1, -11)
+            local sCallName = tbDebugInfo.name
+            if not sCallName or "" == sCallName then
+                sCallName = "delegate"
+            end
+            sMsg =
+                "<color=#FF317C>[" ..
+                sFileName .. "][" .. sCallName .. "] " .. tbDebugInfo.currentline .. ": </color>" .. tostring(sMsg)
+            Logger.DEBUG(sMsg .. "\n" .. debug.traceback())
+        end
+    end
+end
+
+-----------------------------------------------------------------------------
+------------------ 基础数据类型工具（table/string 等等） ----------------------
+-----------------------------------------------------------------------------
+-----------------------------------------------------------------------------
+-- desc json encode
+-- @param tb : table 待编码的table
+-- @return     nil or string 编码后的串(参数错误时返回 nil)
+-----------------------------------------------------------------------------
+function Util.JEncode(tb)
+    if "table" ~= type(tb) then
+        Util.Error("Not A Table.")
+        return nil
+    end
+
+    return JsonManager.EncodeJson(tb)
+end
+
+-----------------------------------------------------------------------------
+-- desc json decode
+-- @param sJson : string 待解码的串
+-- @return        nil or table 解码后的 table(参数错误时返回 nil)
+-----------------------------------------------------------------------------
+function Util.JDecode(sJson)
+    if "string" ~= type(sJson) then
+        Util.Error("Not A String.")
+        return nil
+    end
+
+    return JsonManager.DecodeJson(sJson)
+end
+
+-----------------------------------------------------------------------------
+-- desc 打印table
+-- @param tb           : table 待打印 table
+-- @param sName        : nil or string 自定义 table 名
+-- @param useSdkMethod : bool 是否使用潘多拉 sdk 原生方法
+-----------------------------------------------------------------------------
+function Util.PrintTb(tb, sName, useSdkMethod)
+    if isDebug then
+        if "table" ~= type(tb) then
+            Util.Error("Not A Table. type: " .. type(tb) .. ", " .. sName)
+            return
+        end
+
+        if useSdkMethod then
+            TableTool.Print(tb, sName or "====")
+            return
+        end
+
+        local tbDebugInfo = debug.getinfo(2, "nSl")
+        if tbDebugInfo and tbDebugInfo.source and tbDebugInfo.currentline then
+            local sFileName = tbDebugInfo.source:match("^.+/(.+)$"):sub(1, -11)
+            local sCallName = tbDebugInfo.name
+            if not sCallName or "" == sCallName then
+                sCallName = "delegate"
+            end
+            local sPre =
+                "<color=#FF317C>[" ..
+                sFileName .. "][" .. sCallName .. "] " .. tbDebugInfo.currentline .. ": </color>" .. tostring(sName)
+            local sTableStr = table.show(tb, sPre)
+            sTableStr = string.sub(sTableStr, 1, 655350)
+            Logger.DEBUG(sTableStr .. "\n" .. debug.traceback())
+        end
+    end
+end
+
+-----------------------------------------------------------------------------
+-- desc 字符串分割
+-- @param sStr : string 待分割字符串
+-- @param sDel : string 分隔符
+-- @return       nil or table 分割后组成的 table(参数错误时返回 nil)
+-----------------------------------------------------------------------------
+function Util.Split(sStr, sDel)
+    if "string" ~= type(sStr) then
+        Util.Error("Not A String.")
+        return nil
+    end
+
+    return StringTool.Split(sStr, sDel)
+end
+
+-----------------------------------------------------------------------------
+-- desc 处理含一些富文本标签的内容（过滤或者替换）
+-- @param sContent : string 要处理的内容
+-- @param simple   : bool 是否简单处理
+-- @return           nil or string 处理后的串(参数错误时返回 nil)
+-----------------------------------------------------------------------------
+function Util.ProcessContent(sContent, simple)
+    if "string" ~= type(sContent) and "number" ~= type(sContent) then
+        Util.Error("Not A String or Number.")
+        return nil
+    end
+
+    -- 替换换行
+    local sResult = string.gsub(sContent, "%[br%]", "\n")
+
+    if not simple then
+        -- 替换配置中的首行段首空格，用全角空格可以，半角的会被 ngui 吞掉
+        sResult = string.gsub(sResult, "\\n", "\n")
+        sResult = string.gsub(sResult, "%[blank%]", "　")
+        sResult = string.gsub(sResult, "</p>", "")
+        sResult = string.gsub(sResult, "<p>", "")
+        sResult = string.gsub(sResult, "&ldquo;", "“")
+        sResult = string.gsub(sResult, "&rdquo;", "”")
+        sResult = string.gsub(sResult, "&nbsp;", " ")
+        sResult = string.gsub(sResult, "<br />", "\n")
+
+        -- 富文本颜色处理
+        sResult = string.gsub(sResult, "(%[color=#)([0-9a-fA-F]+)(%])", "[%2]")
+        sResult = string.gsub(sResult, "%[/color%]", "[-]")
+    end
+
+    return sResult
+end
+
+-----------------------------------------------------------------------------
+-- URI 加密
+-- @param s : string 待 encode 的串
+-- @return    nil or string 加密后的串(参数错误时返回 nil)
+-----------------------------------------------------------------------------
+function Util.EncodeURI(s)
+    if "string" ~= type(s) then
+        Util.Error("Not A String.")
+        return nil
+    end
+
+    s =
+        string.gsub(
+        s,
+        "([^%w%.%- ])",
+        function(c)
+            return string.format("%%%02X", string.byte(c))
+        end
+    )
+    return string.gsub(s, " ", "+")
+end
+
+-----------------------------------------------------------------------------
+-- desc URI 解密
+-- @param s : string 待 decode 的串
+-- @return    nil or string 解密后的串(参数错误时返回 nil)
+-----------------------------------------------------------------------------
+function Util.DecodeURI(s)
+    if "string" ~= type(s) then
+        Util.Error("Not A String.")
+        return nil
+    end
+
+    s =
+        string.gsub(
+        s,
+        "%%(%x%x)",
+        function(h)
+            return string.char(tonumber(h, 16))
+        end
+    )
+    return s
+end
+
+-----------------------------------------------------------------------------
+-- desc 复制 table
+-- @param tbTarget : table 被复制的 table
+-- @return           nil or table 复制后新的 table(参数错误时返回 nil)
+-----------------------------------------------------------------------------
+function Util.DeepCopy(tbTarget)
+    if "table" ~= type(tbTarget) then
+        return nil
+    end
+
+    local tbDest = {}
+    for k, v in pairs(tbTarget) do
+        if "table" == type(v) then
+            tbDest[k] = Util.DeepCopy(v)
+        else
+            tbDest[k] = v
+        end
+    end
+
+    return tbDest
+end
+
+-----------------------------------------------------------------------------
+-- desc 更改 http 协议为 https
+-- @param sUrl : string 需要替换的链接 url
+-- @return       nil or string 转换后的 url(参数错误时返回 nil)
+-----------------------------------------------------------------------------
+function Util.TransHttpToHttps(sUrl)
+    if "string" ~= type(sUrl) then
+        Util.Error("Not A String.")
+        return nil
+    end
+
+    if not string.find(sUrl, "https") and string.find(sUrl, "http") then
+        sUrl = string.gsub(sUrl, "http", "https")
+    end
+
+    return sUrl
+end
+
+-----------------------------------------------------------------------------
+-- desc 格式化时间——英文默认格式为 00:00:00；中文默认格式为 0日0时0分0秒
+-- @param iTime    : number 剩余时间
+-- @param CNFormat : boolean 中文日期格式
+-- @return           nil or string 格式化后的字符串(参数错误时返回 nil)
+-----------------------------------------------------------------------------
+function Util.FormatTime(iTime, CNFormat)
+    if "number" ~= type(iTime) then
+        Util.Error("Not A Number.")
+        return nil
+    end
+
+    if CNFormat then
+        if 0 >= iTime then
+            return "0日0时0分0秒"
+        end
+
+        local iDay = math.floor(iTime / 86400)
+        local iHour = math.floor((iTime - 86400 * iDay) / 3600)
+        return iDay ..
+            "天" .. iHour .. "时" .. tonumber(os.date("%M", iTime)) .. "分" .. tonumber(os.date("%S", iTime)) .. "秒"
+    end
+
+    if 0 >= iTime then
+        return "00:00:00"
+    end
+
+    local iHour = math.floor(iTime / 3600)
+    if 0 == iHour then
+        iHour = "00"
+    elseif 10 > iHour then
+        iHour = "0" .. iHour
+    end
+
+    return iHour .. ":" .. os.date("%M:%S", iTime)
+end
+
+-----------------------------------------------------------------------------
+--------------------------------- 上报 --------------------------------------
+-----------------------------------------------------------------------------
+-----------------------------------------------------------------------------
+-- desc 通用上报（上报通用方法，保留字段如果不够用，请使用方法 ReportWithInfoId）
+-- @param type       : number 上报类型
+-- @param reserve0   : nil or string or number 保留字段0
+-- @param reserve1   : nil or string or number 保留字段1
+-- @param reserve2   : nil or string or number 保留字段2
+-- @param goodsId    : nil or string or number 礼包ID
+-- @param goodsNum   : nil or string or number 礼包数量
+-- @param luaRun     : boolean 标识是否是 lua 运行上报
+-----------------------------------------------------------------------------
+function Util:Report(type, reserve0, reserve1, reserve2, goodsId, goodsNum, luaRun, module)
+    local infoId = self.cfg.BASE.INFO_ID
+    if 4 == type or 5 == type or luaRun then
+        infoId = 0
+    end
+
+    local tbExtendList = {}
+    if reserve0 and 0 ~= reserve0 then
+        table.insert(tbExtendList, {name = "reserve0", value = tostring(reserve0)})
+    end
+    if reserve1 and 0 ~= reserve1 then
+        table.insert(tbExtendList, {name = "reserve1", value = tostring(reserve1)})
+    end
+    if reserve2 and 0 ~= reserve2 then
+        table.insert(tbExtendList, {name = "reserve2", value = tostring(reserve2)})
+    end
+    -- 不能传空 table
+    if 0 == #tbExtendList then
+        tbExtendList = nil
+    end
+
+    local userData = Common.GetUserData()
+    local staticReportJsonRep = {}
+    staticReportJsonRep["str_open_id"] = userData.sOpenId
+    staticReportJsonRep["str_appid"] = userData.sAppId
+    staticReportJsonRep["str_sdkversion"] = Common.GetSDKVersion()
+    staticReportJsonRep["partition"] = userData.sPartition
+    staticReportJsonRep["sroleid"] = userData.sRoleId
+    staticReportJsonRep["str_phoneid"] = "" --userData.imsi;
+    staticReportJsonRep["uint_clientip"] = 0 -- tonumber(userData.client_ip);
+    staticReportJsonRep["uint_ostype"] = tonumber(userData.sPlatID)
+
+    staticReportJsonRep["recommend_id"] = tostring(0)
+    staticReportJsonRep["changjing_id"] = tostring(0)
+    staticReportJsonRep["goods_id"] = tostring(goodsId or 0)
+
+    staticReportJsonRep["uint_module"] = tonumber(module or self.cfg.BASE.MODULE_ID)
+    staticReportJsonRep["uint_channel_id"] = tonumber(self.cfg.BASE.CHANNEL_ID)
+    staticReportJsonRep["uint_type"] = tonumber(type)
+    staticReportJsonRep["uint_act_id"] = tonumber(infoId)
+    staticReportJsonRep["uint_timestamp"] = os.time()
+
+    staticReportJsonRep["uint_jump_type"] = 0
+    staticReportJsonRep["str_jump_url"] = ""
+    staticReportJsonRep["uint_count"] = tonumber(goodsNum or 0)
+    staticReportJsonRep["uint_fee"] = 0
+    staticReportJsonRep["currency_type"] = "0"
+    staticReportJsonRep["act_style"] = tonumber(self.cfg.BASE.ACT_STYLE)
+    staticReportJsonRep["flow_id"] = 0
+    staticReportJsonRep["extend"] = tbExtendList
+
+    local stringReport = Util.JEncode((staticReportJsonRep))
+
+    Common.ReportStringStats(stringReport)
+end
+
+-----------------------------------------------------------------------------
+-- desc 通用上报（上报备用方法，需要指定活动 ID 时或者保留字段不够时，用此方法）
+-- @param type       : number 上报类型
+-- @param infoId     : nil or string 活动 ID，不填时默认当前活动 ID
+-- @param goodsId    : nil or string or number 礼包ID
+-- @param goodsNum   : nil or string or number 礼包数量
+-- @param extendList : nil or table 扩展字段 table，格式如：{{name = "reserve0", value = "111"}, {name = "reserve0", value = "111"}}
+-----------------------------------------------------------------------------
+function Util:ReportWithInfoId(type, infoId, goodsId, goodsNum, tbExtendList)
+    Common.ReportStats(
+        self.cfg.BASE.MODULE_ID,
+        self.cfg.BASE.CHANNEL_ID,
+        type,
+        infoId,
+        0,
+        "",
+        "0",
+        0,
+        goodsId or 0,
+        goodsNum or 0,
+        0,
+        "0",
+        self.cfg.BASE.ACT_STYLE,
+        0,
+        tbExtendList
+    )
+end
+
+-----------------------------------------------------------------------------
+--------------------------- 文件操作（cookie） -------------------------------
+-----------------------------------------------------------------------------
+-----------------------------------------------------------------------------
+-- 获取 cookie 数据（业务无 roleid 时，该部分要修改）
+-- @param sExt : string 扩展字段
+-- @return nil or string cookie 中的内容
+-----------------------------------------------------------------------------
+function Util:GetCookieInfo(sExt)
+    local sCookieName =
+        self.cfg.BASE.COOKIE_NAME_PRE ..
+        "_" .. (UserModel.GetOpenId() or "") .. "_" .. (UserModel.GetRoleId() or "") .. (sExt or "") .. ".txt"
+    local sCookieContent = Common.ReadCookie(sCookieName)
+    return Util.JDecode(sCookieContent) or sCookieContent
+end
+
+-----------------------------------------------------------------------------
+-- 设置 cookie 数据（业务无 roleid 时，该部分要修改）
+-- @param cookieInfo : string or number or table 需要写入 cookie 中的内容，支持 table
+-- @param sExt : string 扩展字段
+-----------------------------------------------------------------------------
+function Util:SetCookieInfo(cookieInfo, sExt)
+    local sCookieName =
+        self.cfg.BASE.COOKIE_NAME_PRE ..
+        "_" .. (UserModel.GetOpenId() or "") .. "_" .. (UserModel.GetRoleId() or "") .. (sExt or "") .. ".txt"
+    if "table" == type(cookieInfo) then
+        cookieInfo = Util.JEncode(cookieInfo)
+    end
+
+    Common.WriteCookie(sCookieName, tostring(cookieInfo) or "")
+end
+
+-----------------------------------------------------------------------------
+-- 转换日期为时间戳
+-- @param cookieInfo : string or number or table 需要写入 cookie 中的内容，支持 table
+-- @param sExt : string 扩展字段
+-----------------------------------------------------------------------------
+function Util.ConvertTimeStamp(timeStr)
+    if (timeStr == "" or timeStr == nil) then
+        return 0
+    end
+    local pattern = "(%d+)-(%d+)-(%d+) (%d+):(%d+):(%d+)"
+    local sYear, sMonth, sDay, sHour, sMinute, sSeconds = timeStr:match(pattern)
+    return os.time({year = sYear, month = sMonth, day = sDay, hour = sHour, min = sMinute, sec = sSeconds})
+end
+
+-----------------------------------------------------------------------------
+-- desc （通用）获取每日红点数（每日一次需求通用）
+-- @param sExt : string 扩展字段
+-- @return number 每日红点数 —— 0/1
+-----------------------------------------------------------------------------
+function Util.GetRedDotNumPerDay(sExt)
+    local tbCookieInfo = Util.GetCookieInfo(sExt)
+    local sToday = os.date("%Y-%m-%d")
+    if not tbCookieInfo or not next(tbCookieInfo) or sToday ~= tbCookieInfo["lastRead"] then
+        return 1
+    end
+
+    return 0
+end
+
+-----------------------------------------------------------------------------
+-- desc （通用）设置每日红点数（每日一次需求通用）
+-- @param sExt : string 扩展字段
+-----------------------------------------------------------------------------
+function Util.SetRedDotNumPerDay(sExt)
+    local sToday = os.date("%Y-%m-%d")
+    local tbCookie = {lastRead = sToday, dotNum = 1}
+    Util.SetCookieInfo(tbCookie, sExt)
+end
+
+-----------------------------------------------------------------------------
+-- desc （通用）通过潘多拉后台返回的tags字段判断属于那种类型活动
+-- @param sExt : string 扩展字段
+-----------------------------------------------------------------------------
+function Util.GetActTag(tagName)
+    local actionTag = {
+        ["Hot"] = 1,
+        ["New"] = 2,
+        ["Now"] = 3,
+        ["预告"] = 4,
+        ["限时"] = 6
+    }
+    if tagName == nil or tagName == "" then
+        return 0
+    end
+
+    if actionTag[tagName] ~= nil then
+        return actionTag[tagName]
+    else
+        return 0
+    end
+end
+
+-----------------------------------------------------------------------------
+--------------------------------- 其他 --------------------------------------
+-----------------------------------------------------------------------------
+-----------------------------------------------------------------------------
+-- desc 道聚城拉取返回的 payType 转换成数字 payType
+-- @param sPayType : string 拉取时 payType
+-- @return           string 数字 payType
+-----------------------------------------------------------------------------
+function Util.GetNumericPayType(sPayType)
+    if "dq" == sPayType then
+        return Configs.OTHER.DB_1_PAY_TYPE
+    elseif "rmb|qpqb|tenpay|quick|bank|weixinpay" == sPayType then
+        return Configs.OTHER.RMB_PAY_TYPE
+    elseif "jb" == sPayType then
+        return Configs.OTHER.DB_2_PAY_TYPE
+    elseif "combine" == sPayType then
+        return Configs.OTHER.DB_1_2_PAY_TYPE
+    end
+
+    return Configs.OTHER.DB_3_PAY_TYPE
+end
+
+--判断是否在数组内
+function Util.InArray(b, list)
+    if not list then
+        return false
+    end
+    if list then
+        for k, v in pairs(list) do
+            if v == b then
+                return true, k
+            end
+        end
+    end
+end
+
+--数组打乱顺序
+function Util.Shuffle(t)
+    if type(t) ~= "table" then
+        return
+    end
+    local tab = {}
+    local index = 1
+    while #t ~= 0 do
+        local n = math.random(0, #t)
+        if t[n] ~= nil then
+            tab[index] = t[n]
+            table.remove(t, n)
+            index = index + 1
+        end
+    end
+    return tab
+end
+
+return Util

@@ -1,0 +1,289 @@
+require "Common"
+require "./PandoraToolBoxHelperTools"
+require "StringTool"
+require "JsonManager"
+
+PandoraToolBoxVendorManager = { }
+local this = PandoraToolBoxVendorManager
+local Logger = Common.GetLogger()
+local panel
+
+local contentKey = "request"
+local paramKey = "vendorList"
+local whiteListKey = "whiteList"
+local blackListKey = "blackList"
+
+local activitySettings = { [contentKey] = { }, [paramKey] = { } }
+local currentVendorS = {[whiteListKey] = { },[blackListKey] = { }}
+local currentRequest = ""
+
+-- 按钮gameObect和参数对应表
+local buttonParamsTable = { }
+--使用索引追踪测试进度
+local whiteIndex = 0
+local blackIndex = 0
+-- 当前测试是否结束
+local isDone = false
+-- 白名单和黑名单结果分离，
+local failedVendors = {[whiteListKey] = {},[blackListKey] = {}}
+
+
+function PandoraToolBoxVendorManager.Init(panelGameObject)
+    panel = panelGameObject
+    PandoraToolBoxHelperTools.UpdateLocalConfig(PandoraToolBoxSettings.vendorConfigLuaFileName, PandoraToolBoxSettings.vendorConfigCookieName)
+    local jsonSettings = Common.ReadCookie(PandoraToolBoxSettings.vendorConfigCookieName)
+    if jsonSettings == "" then
+        return
+    end
+    activitySettings = JsonManager.DecodeJson(jsonSettings)
+
+    PandoraToolBoxHelperTools.CreateButtonList(activitySettings, contentKey, paramKey, panel.activityButtonTemplate, panel.vendorGrid, this.OnActivityButtonClick, this.OnDeleteButtonClick, buttonParamsTable)
+    PandoraToolBoxHelperTools.SortButton(buttonParamsTable, panel.vendorGrid)
+end
+
+-- region 函数区
+function PandoraToolBoxVendorManager.AddActivity()
+    local isValid, activityName, request, whiteList, blackList = this.ReadActivityConfig()
+    if isValid == false then
+        return
+    end
+
+    if PandoraToolBoxHelperTools.IsContentInTable(activitySettings[contentKey], activityName, request) == true then
+        return
+    end
+
+    local vendorList = {}
+    vendorList[whiteListKey] = whiteList
+    vendorList[blackListKey] = blackList
+    
+    activitySettings[contentKey][activityName] = request
+    activitySettings[paramKey][activityName] = vendorList
+
+    -- 写入
+    local jsonSettings = JsonManager.EncodeJson(activitySettings)
+    Common.WriteCookie(PandoraToolBoxSettings.vendorConfigCookieName, jsonSettings)
+
+    -- 添加button
+    PandoraToolBoxHelperTools.AddButton(activityName, request, vendorList, panel.activityButtonTemplate, panel.vendorGrid, this.OnActivityButtonClick, this.OnDeleteButtonClick, buttonParamsTable)
+    PandoraToolBoxHelperTools.SortButton(buttonParamsTable, panel.vendorGrid)
+end
+
+function PandoraToolBoxVendorManager.OnActivityButtonClick(go)
+    local paramsTable = buttonParamsTable[go]
+    local request = paramsTable["content"]
+    local vendorList = paramsTable["params"]
+  
+    -- 将配置显示在右边栏中
+    this.ShowActivity(go,request,vendorList[whiteListKey],vendorList[blackListKey])
+end
+
+function PandoraToolBoxVendorManager.ShowActivity(go,request,whiteList,blackList)
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.UGUI then
+        --暂未实现
+        panel.functionNameInput.text = go.name
+        panel.functionContentInput.text = request
+        panel.functionParamsInput.text = whiteList
+        panel.defaultFunctionParamsInput.text = blackList
+        return
+    end
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        panel.activityNameInput.value = go.name
+        panel.requestInput.value = request
+        panel.whitelistInput.value = whiteList
+        panel.blacklistInput.value = blackList
+        return
+    end
+end
+
+function PandoraToolBoxVendorManager.OnDeleteButtonClick(go)
+    local parentGo = go.transform.parent.gameObject
+    buttonParamsTable[parentGo] = nil
+    local activityName = parentGo.name
+    activitySettings[contentKey][activityName] = nil
+    activitySettings[paramKey][activityName] = nil
+    local jsonSettings = JsonManager.EncodeJson(activitySettings)
+    Common.WriteCookie(PandoraToolBoxSettings.vendorConfigCookieName, jsonSettings)
+    UnityEngine.Object.DestroyImmediate(parentGo)
+    -- ngui版本需要
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        panel.vendorGrid:GetComponent("UIGrid"):Reposition()
+    end
+end
+
+function PandoraToolBoxVendorManager.ExecuteTest()
+    local isValid, activityName, request, whiteList, blackList = this.ReadActivityConfig()
+    if isValid == false then
+        return
+    end
+    currentRequest = request
+    currentVendorS[whiteListKey] = this.ProcessVendorList(whiteList)
+    currentVendorS[blackListKey] = this.ProcessVendorList(blackList)
+    Common.TablePrinter(currentVendorS, "currentVendorS")
+    this.Next()
+end
+
+function PandoraToolBoxVendorManager.ReadActivityConfig()
+    local activityName,request,whiteList,blackList 
+
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.UGUI then
+        --暂未实现
+        activityName = PandoraToolBoxHelperTools.TrimSpace(panel.functionNameInput.text)
+        request = PandoraToolBoxHelperTools.TrimSpace(panel.functionContentInput.text)
+        whiteList = panel.functionParamsInput.text
+        blackList = panel.defaultFunctionParamsInput.text
+    end
+
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        activityName = PandoraToolBoxHelperTools.TrimSpace(panel.activityNameInput.value)
+        request = PandoraToolBoxHelperTools.TrimSpace(panel.requestInput.value)
+        whiteList = PandoraToolBoxHelperTools.TrimSpace(panel.whitelistInput.value)
+        blackList = PandoraToolBoxHelperTools.TrimSpace(panel.blacklistInput.value)
+    end
+
+    local isActivityNameValid = PandoraToolBoxHelperTools.IsContentValid(activityName, PandoraToolBoxSettings.activityNameInvalidTips)
+    local isRequestValid = PandoraToolBoxHelperTools.IsContentValid(request, PandoraToolBoxSettings.requestInvalidTips)
+    local isWhiteListValid = PandoraToolBoxHelperTools.IsContentValid(whiteList, PandoraToolBoxSettings.vendorListInvalidTips)
+    local isBlackListValid = PandoraToolBoxHelperTools.IsContentValid(blackList, PandoraToolBoxSettings.vendorListInvalidTips)
+
+    if isActivityNameValid == false or isRequestValid == false or isWhiteListValid == false or isBlackListValid == false then
+        return false, "", "", "", ""
+    end
+
+    --因为NGUI UIInput会把粘贴文本的换行符替换掉，这里对粘贴的文本做格式化处理
+    whiteList = this.FormatVendorList(whiteList)
+    blackList = this.FormatVendorList(blackList)
+    --将值改为格式化后的
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        panel.whitelistInput.value = whiteList
+        panel.blacklistInput.value = blackList
+    end
+
+    return true, activityName, request, whiteList, blackList
+end
+
+function PandoraToolBoxVendorManager.FormatVendorList(vendors)
+    --通过逗号,空格,换行分割字符串，在数字之前添加换行符
+    local splited = StringTool.Split(vendors, ",%s\n")
+    local tbl = {}
+    for index, value in ipairs(splited) do
+        if index ~= 1 then
+            table.insert(tbl,",")
+        end
+
+        if tonumber(value) ~= nil and index ~= 1 then
+            table.insert(tbl,"\n")
+        end
+        
+        table.insert(tbl,value)
+    end
+    
+    return table.concat(tbl,"")
+end
+
+--只把渠道号过滤出来添加到表中
+function PandoraToolBoxVendorManager.ProcessVendorList(vendors)
+    local vendorTbl = {}
+    local splitedTbl = StringTool.Split(vendors,",%s\n")
+
+    for index, value in ipairs(splitedTbl) do
+        if tonumber(value) ~= nil then
+            table.insert(vendorTbl,value)
+        end
+    end
+    return vendorTbl
+end
+
+function PandoraToolBoxVendorManager.Next()
+    local request
+    local requestType
+    local vendor 
+    if whiteIndex + 1 <= #currentVendorS[whiteListKey] then
+        whiteIndex = whiteIndex + 1
+        vendor = currentVendorS[whiteListKey][whiteIndex]
+        request = this.GetRequest(currentRequest, vendor)
+        requestType = whiteListKey
+    else if blackIndex + 1 <= #currentVendorS[blackListKey] then
+            blackIndex = blackIndex + 1
+            vendor = currentVendorS[blackListKey][blackIndex]
+            request = this.GetRequest(currentRequest, vendor)
+            requestType = blackListKey
+        end
+    end
+
+    if blackIndex + 1 > #currentVendorS[blackListKey] then
+        isDone = true
+    end
+
+    Common.CallBroker(9000, request, this.OnResponse,requestType,vendor)
+end
+
+function PandoraToolBoxVendorManager.GetRequest(originRequest,vendor)
+    local target = string.format('"vender":"%s"', vendor)
+    return (string.gsub(originRequest, '"vender":"%d+"', target))
+end
+
+function PandoraToolBoxVendorManager.OnResponse(requestType,vendor,response)
+    local pass = true
+    local respTable = JsonManager.DecodeJson(response)
+    local respContenTable = JsonManager.DecodeJson(respTable["resp"])
+    Common.TablePrinter(respContenTable, "respContent")
+    local body = respContenTable["body"]
+    if body["ret"] == nil or tostring(body["ret"]) ~= "0" then
+        pass = false
+    end
+
+    if pass and requestType == blackListKey then
+        table.insert(failedVendors[requestType],vendor)
+    end
+
+    if not pass and requestType == whiteListKey then
+        table.insert(failedVendors[requestType],vendor)
+    end
+    
+    if isDone == true then
+        this.ShowResult()
+    else
+        this.Next()
+    end
+end
+
+function PandoraToolBoxVendorManager.ShowResult()
+    local resultInfo = ""
+    local summary = "-------------------- 测试通过 --------------------\n"
+    local vendorNumInfo = string.format("共测试白名单渠道号%d个，黑名单渠道号%d个。",#currentVendorS[whiteListKey],#currentVendorS[blackListKey])
+    local whiteDetail = ""
+    local blackDetail = ""
+    
+    if #failedVendors[whiteListKey] ~= 0 then
+        whiteDetail = table.concat(failedVendors[whiteListKey],"\n")
+    end
+    
+    if #failedVendors[blackListKey] ~= 0 then
+        blackDetail = table.concat(failedVendors[blackListKey],"\n")
+    end
+
+    if whiteDetail ~= "" or blackDetail ~= "" then
+        summary = "-------------------- 测试未通过 --------------------\n"
+        whiteDetail = string.format("白名单未通过的渠道号:\n%s", whiteDetail)
+        blackDetail = string.format("黑名单未通过的渠道号:\n%s", blackDetail)
+    end
+
+    resultInfo = string.format("\n%s\n%s\n\n%s\n\n%s", summary,vendorNumInfo,whiteDetail,blackDetail)
+    PandoraToolBoxHelperTools.ShowCommonTips(resultInfo)
+    this.RestoreState()
+end
+
+function PandoraToolBoxVendorManager.RestoreState()
+    currentRequest = ""
+    whiteIndex = 0
+    blackIndex = 0
+    isDone = false
+    currentVendorS = {[whiteListKey] = {},[blackListKey] = {}}
+    failedVendors = {[whiteListKey] = {},[blackListKey] = {}}
+end
+
+function PandoraToolBoxVendorManager.Clear()
+    buttonParamsTable = { }
+    panel = nil
+end
+-- endregion

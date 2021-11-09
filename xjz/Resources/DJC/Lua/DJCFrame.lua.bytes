@@ -1,0 +1,551 @@
+
+local WINDOWS_EDITOR = 7;
+if UnityEngine.Application.platform == WINDOWS_EDITOR then
+  require "DJCFrameMonitor";
+end
+
+require "Common"
+
+local DJCConfigs = require "DJCConfigs"
+local DJCUtil = require "DJCUtil"
+local UserModel = require "DJCUserModel"
+
+-- CSharpInterface = com.tencent.pandora.CSharpInterface
+DJCCSharpInterface = com.tencent.pandora.CSharpInterface
+DJCFrame = {}
+
+--通过actName指定实现对应活动的单例模式
+function DJCFrame:New(actName)
+    --如果已经存在这个实例直接返回
+    if actName ~= nil and DJCConfigs.ACTIONS[actName] ~= nil then
+        return DJCConfigs.ACTIONS[actName]
+    end
+    --无这个实例则添加并更新到Actions内
+    local o = {}
+    setmetatable(o, self)
+    self.__index = self
+    o.Request = require("DJCRequest"):New()
+    o.Model = o.Request.Model
+    o.Configs = o.Request.Configs
+    o.Cmd = require "DJCCmd"
+    o.UserModel = require "DJCUserModel"
+    o.Util = require("DJCUtil"):New(o.Configs)
+    -- UI判断
+    if DJCConfigs.BASE.UI_TYPE == "NGUI" then
+        o.UI = require "DJCNGUI"
+    elseif DJCConfigs.BASE.UI_TYPE == "UGUI" then
+        o.UI = require "DJCUGUI"
+    end
+    --如果actName不为nil，则添加到Actions内，无则直接返回
+    if actName ~= nil then
+        DJCUtil.Log("add actName to action" .. actName)
+        DJCConfigs.ACTIONS[actName] = o
+    end
+
+    return o
+end
+
+-- function DJCFrame:GetInstance(actName)
+--     if self.actName == nil then
+--         DJCUtil.Log("GetInstance=====" .. actName)
+--         self.actName = self:New(actName)
+--     end
+
+--     return self.actName
+-- end
+
+-----------------------------------------------------------------------------
+-- desc 兼容老的DJCFrame，此处空实现，因为新版frame会自动根据规则判断环境，
+-- engine是根据git分支单独开发无需传参判断
+-- @return table 包体table
+-----------------------------------------------------------------------------
+function DJCFrame.Init(init_config)
+    return init_config
+end
+
+-----------------------------------------------------------------------------
+-- desc 兼容老的DJCFrame，道聚城服务查询接口，比如活动基本信息，礼包单信息，等
+-- extend_list fields:iGoodsId,lLimitNum,lBuyNum,lTotalBuyNum,goodsLimit,goodsLeft,userFreeze
+-- @return table 包体table
+-----------------------------------------------------------------------------
+function DJCFrame.GetRecommendGoods(action_config, callback, extend_list)
+    -- DJCUtil.Log("extend_list===" .. tostring(extend_list))
+    if DJCFrame.CheckRequestConfig(action_config) == false then
+        DJCUtil.Error(DJCConfigs.MSG.REQ_PARAMS_ERROR)
+        return
+    else
+        action_config.set = "1"
+        action_config.appId = "2005" --潘多拉渠道
+        action_config.buy_plug_id = "7200"
+        -- 获得当前djc单例对象
+        local actName = DJCFrame._GetDjcObjUniqueId(action_config)
+        local djcObj = DJCFrame:New(actName)
+        -- 补充设置当前对象全局配置信息
+        DJCFrame._SetDjcObjGlobalCfg(djcObj, action_config)
+        -- DJCUtil.PrintTb(djcObj.Configs.BASE, "GetRecommendGoods.djcObj.Configs.BASE====")
+        --发送请求
+        djcObj.Request:Get(
+            DJCConfigs.NET.DJC_REQUEST,
+            extend_list or {},
+            function(tbResp) -- 拉取成功回调
+                -- 检查活动配置参数
+                if not djcObj.Model:CheckValidityAndProcess(tbResp, DJCConfigs.NET.DJC_REQUEST, djcObj.Configs) then
+                    DJCUtil.Error(DJCConfigs.MSG.ACT_INFO_ERROR)
+                    return
+                end
+                if callback then
+                    local res_status = false
+                    if tbResp["djc_goods_res_resp"]["errcode"] == "0" then
+                        res_status = true
+                    end
+                    callback(
+                        res_status,
+                        {
+                            ["original_resp"] = tbResp
+                        }
+                    )
+                end
+            end,
+            function(tbResp) -- 拉取失败回调
+                if callback then
+                    callback(
+                        false,
+                        {
+                            ["original_resp"] = tbResp
+                        }
+                    )
+                end
+            end
+        )
+    end
+end
+-----------------------------------------------------------------------------
+-- desc 兼容老的DJCFrame，道聚城服务查询接口，比如活动基本信息，礼包单信息，等
+-- extend_list fields:iGoodsId,lLimitNum,lBuyNum,lTotalBuyNum,goodsLimit,goodsLeft,userFreeze
+-- @return table 包体table
+-----------------------------------------------------------------------------
+function DJCFrame.GetDJCInfo(action_config, callback, extend_list)
+    if DJCFrame.CheckRequestConfig(action_config) == false then
+        DJCUtil.Error(DJCConfigs.MSG.REQ_PARAMS_ERROR)
+        return
+    else
+        -- 获得当前djc单例对象
+        local actName = DJCFrame._GetDjcObjUniqueId(action_config)
+        local djcObj = DJCFrame:New(actName)
+        -- 补充设置当前对象全局配置信息
+        DJCFrame._SetDjcObjGlobalCfg(djcObj, action_config)
+        --发送请求
+        djcObj.Request:Get(
+            DJCConfigs.NET.DJC_REQUEST,
+            extend_list or {},
+            function(tbResp) -- 拉取成功回调
+                -- 检查活动配置参数
+                if not djcObj.Model:CheckValidityAndProcess(tbResp, DJCConfigs.NET.DJC_REQUEST, djcObj.Configs) then
+                    DJCUtil.Error(DJCConfigs.MSG.ACT_INFO_ERROR)
+                    return
+                end
+                if callback then
+                    local res_status = false
+                    if tbResp["djc_goods_res_resp"]["errcode"] == "0" then
+                        res_status = true
+                    end
+                    callback(
+                        res_status,
+                        {
+                            ["data"] = tbResp
+                        }
+                    )
+                end
+            end,
+            function(tbResp) -- 拉取失败回调
+                if callback then
+                    callback(
+                        false,
+                        {
+                            ["data"] = tbResp
+                        }
+                    )
+                end
+            end
+        )
+    end
+end
+
+-----------------------------------------------------------------------------
+-- desc 兼容老的DJCFrame，请求ams流程等
+-- extend_list fields:iGoodsId,lLimitNum,lBuyNum,lTotalBuyNum,goodsLimit,goodsLeft,userFreeze
+-- @return table 包体table
+-----------------------------------------------------------------------------
+function DJCFrame.GetAMSInfo(action_config, callback, extend_list)
+    if DJCFrame.CheckRequestConfig(action_config) == false then
+        DJCUtil.Error(DJCConfigs.MSG.REQ_PARAMS_ERROR)
+        return
+    else
+        -- 获得当前djc单例对象
+        local actName = DJCFrame._GetDjcObjUniqueId(action_config)
+        local djcObj = DJCFrame:New(actName)
+        -- 补充设置当前对象全局配置信息
+        DJCFrame._SetDjcObjGlobalCfg(djcObj, action_config)
+        --进行extend_list兼容
+        --amsreq兼容
+        local send_param = {}
+        send_param["pdr_extend"] = extend_list["pdr_extend"]
+        for key, value in pairs(extend_list["DJC"]) do
+            send_param[key] = value
+        end
+        --发送请求
+        djcObj.Request:Get(
+            DJCConfigs.NET.AMS_REQUEST,
+            send_param,
+            function(tbResp) -- 拉取成功回调
+                -- 检查活动配置参数
+                if not djcObj.Model:CheckValidityAndProcess(tbResp, DJCConfigs.NET.DJC_REQUEST, djcObj.Configs) then
+                    DJCUtil.Error(DJCConfigs.MSG.ACT_INFO_ERROR)
+                    return
+                end
+                if callback then
+                    callback(
+                        true,
+                        {
+                            ["data"] = tbResp
+                        }
+                    )
+                end
+            end,
+            function(tbResp) -- 拉取失败回调
+                if callback then
+                    callback(
+                        false,
+                        {
+                            ["data"] = tbResp
+                        }
+                    )
+                end
+            end
+        )
+    end
+end
+
+-----------------------------------------------------------------------------
+-- desc 兼容老的DJCFrame，同时获取 潘多拉-多平台（AMS/PaaS/道聚城） 数据通用接口
+-- extend_list fields:iGoodsId,lLimitNum,lBuyNum,lTotalBuyNum,goodsLimit,goodsLeft,userFreeze
+-- @return table 包体table
+-----------------------------------------------------------------------------
+function DJCFrame.GetInfo(action_config, callback, extend_list)
+    if DJCFrame.CheckRequestConfig(action_config) == false then
+        DJCUtil.Error(DJCConfigs.MSG.REQ_PARAMS_ERROR)
+        return
+    else
+        -- 获得当前djc单例对象
+        local actName = DJCFrame._GetDjcObjUniqueId(action_config)
+        local djcObj = DJCFrame:New(actName)
+
+        -- 补充设置当前对象全局配置信息
+        DJCFrame._SetDjcObjGlobalCfg(djcObj, action_config)
+        -- DJCUtil.PrintTb(djcObj.Configs.BASE, "GetInfo.djcObj.Configs.BASE====")
+        -- DJCUtil.PrintTb(DJCConfigs.ACTIONS, "DJCConfigs.ACTIONS====")
+        --进行extend_list兼容
+        --amsreq兼容
+        local send_param = {}
+        send_param["pdr_extend"] = extend_list["AMS"]["pdr_extend"]
+        for key, value in pairs(extend_list["DJC"]) do
+            send_param[key] = value
+        end
+        --发送请求
+        djcObj.Request:Get(
+            DJCConfigs.NET.INIT_REQUEST,
+            send_param,
+            function(tbResp) -- 拉取成功回调
+                -- DJCUtil.Log(actName, "actName===========")
+                -- DJCUtil.PrintTb(DJCConfigs.ACTIONS, "DJCConfigs.ACTIONS=====")
+                -- DJCUtil.PrintTb(djcObj, "djcObj=====")
+                -- 检查活动配置参数
+                if not djcObj.Model:CheckValidityAndProcess(tbResp, DJCConfigs.NET.DJC_REQUEST, djcObj.Configs) then
+                    DJCUtil.Error(DJCConfigs.MSG.ACT_INFO_ERROR)
+                    return
+                end
+                -- DJCFrame.BuyGoods(
+                --     action_config,
+                --     {
+                --         buyNum = 1,
+                --         propid = 207810,
+                --         paytype = 2
+                --     },
+                --     function()
+                --         DJCUtil.Log("end=========")
+                --     end
+                -- )
+                -- DJCFrame.RMBOrder(
+                --     djcObj,
+                --     {
+                --         buyNum = 1,
+                --         propid = 207812,
+                --         paytype = 2
+                --     },
+                --     tbResp.djc_resp
+                -- )
+                if callback then
+                    local res_status = false
+                    if tbResp["djc_goods_res_resp"]["errcode"] == "0" then
+                        res_status = true
+                    end
+                    callback(
+                        res_status,
+                        {
+                            ["data"] = tbResp
+                        }
+                    )
+                end
+            end,
+            function(tbResp) -- 拉取失败回调
+                if callback then
+                    callback(
+                        false,
+                        {
+                            ["data"] = tbResp
+                        }
+                    )
+                end
+            end
+        )
+    end
+end
+
+-----------------------------------------------------------------------------
+-- desc 兼容老的DJCFrame，请求ams 动作接口
+-- extend_list fields:iGoodsId,lLimitNum,lBuyNum,lTotalBuyNum,goodsLimit,goodsLeft,userFreeze
+-- DJCFrame.DoAMS({
+--     bizCode = "yxzj", -- 游戏业务码
+--     actStyle = "11168", -- 潘多拉活动对应的 actStyle
+--     channelId = "10646", -- 潘多拉对应活动 channelId
+--     iActivityId= "316567", -- AMS对应活动 iActivityId  或者 Paas的实例id
+--     info_id = "1064204"--潘多拉活动对应的 infoid
+-- },{
+--     iFlowId = Model.flowAlias["exlimitleft"]["flowid"]
+-- }, function(res)
+--     Util.PrintTb(res)
+-- end)
+-- @return table 包体table
+-----------------------------------------------------------------------------
+function DJCFrame.DoAMS(action_config, ams_config, callback)
+    if DJCFrame.CheckRequestConfig(action_config) == false then
+        DJCUtil.Error(DJCConfigs.MSG.REQ_PARAMS_ERROR)
+        return
+    else
+        -- 获得当前djc单例对象
+        local actName = DJCFrame._GetDjcObjUniqueId(action_config)
+        local djcObj = DJCFrame:New(actName)
+        -- 补充设置当前对象全局配置信息
+        DJCFrame._SetDjcObjGlobalCfg(djcObj, action_config)
+        --发送请求
+        djcObj.Request:Get(
+            DJCConfigs.NET.DOAMS_REQUEST,
+            ams_config,
+            function(tbResp) -- 拉取成功回调
+                -- 检查活动配置参数
+                if not djcObj.Model:CheckValidityAndProcess(tbResp, DJCConfigs.NET.DJC_REQUEST, djcObj.Configs) then
+                    DJCUtil.Error(DJCConfigs.MSG.ACT_INFO_ERROR)
+                    return
+                end
+                if callback then
+                    callback(
+                        true,
+                        {
+                            ["data"] = tbResp
+                        }
+                    )
+                end
+            end,
+            function(tbResp) -- 拉取失败回调
+                if callback then
+                    callback(
+                        false,
+                        {
+                            ["data"] = tbResp
+                        }
+                    )
+                end
+            end
+        )
+    end
+end
+
+--人民币支付回调
+function DJCFrame.OnGameCommand(callback, jsonStr)
+    local response = {}
+    local params = DJCUtil.JDecode(jsonStr)
+    if params ~= nil then
+        if params.type == "midasPayCallback" and params.content == "rmb" then
+            if params.result == "success" then
+                response.data = params or " "
+                callback(true, response)
+            else
+                response.data = params or "params.result is failed"
+                callback(false, response)
+            end
+        end
+    else
+        -- params is nil
+        local err_msg = "midasPayCallback error"
+        DJCUtil.Log(err_msg .. jsonStr)
+    end
+end
+
+--拉起人民币支付
+function DJCFrame.RMBOrder(djcObj, buy_config, buy_result)
+    local user_plat_id = UserModel.GetPlatId()
+    if user_plat_id == "0" then
+        local offer_id = buy_result.offerId
+        local product_id = buy_result.product_id
+        local post_pf = buy_result.pf or ""
+        local post_pfExt = buy_result.app_meta
+        local buy_num = tonumber(buy_config.buyNum)
+        local midas_buy_amount = tonumber(buy_result.act_amount) / 10
+        local payItem = product_id .. "*" .. midas_buy_amount .. "*" .. buy_num
+        DJCFrame.MidasPayiOS(djcObj.Configs.BASE.INFO_ID, offer_id, product_id, post_pf, post_pfExt, payItem)
+        return
+    end
+    if user_plat_id == "1" then
+        DJCUtil.PrintTb(buy_result, "buy_result======")
+        local offer_id = buy_result.offerId
+        local pay_url = buy_result.urlParams
+        DJCFrame.MidasPayAndroid(djcObj.Configs.BASE.INFO_ID, offer_id, pay_url)
+        return
+    end
+    DJCUtil.Error("手机系统无法识别！")
+end
+
+-- midas pay to iOS
+function DJCFrame.MidasPayiOS(info_id, offer_id, product_id, post_pf, post_pfExt, payItem)
+    local cmdTb = {
+        type = "midasPay",
+        content = "rmb",
+        platId = "0",
+        actionInfoId = info_id,
+        offerId = offer_id,
+        productId = product_id,
+        pf = post_pf,
+        pfExt = post_pfExt,
+        payItem = payItem
+    }
+    Common.CallGame(DJCUtil.JEncode(cmdTb))
+end
+
+-- midas pay to Android
+function DJCFrame.MidasPayAndroid(info_id, offer_id, pay_url)
+    local cmdTb = {
+        type = "midasPay",
+        content = "rmb",
+        platId = "1",
+        actionInfoId = info_id,
+        offerId = tostring(offer_id),
+        goodsTokenUrl = pay_url,
+    }
+    Common.CallGame(DJCUtil.JEncode(cmdTb))
+end
+
+-----------------------------------------------------------------------------
+-- desc 兼容老的DJCFrame，购买 潘多拉-道聚城 礼包
+-- buy_config:{buyNum:xx,propid:xx,paytype:xx}
+-- @return table 包体table
+-----------------------------------------------------------------------------
+function DJCFrame.BuyGoods(action_config, buy_config, callback)
+    if DJCFrame.CheckRequestConfig(action_config) == false then
+        DJCUtil.Error(DJCConfigs.MSG.REQ_PARAMS_ERROR)
+        return
+    else
+        -- 获得当前djc单例对象
+        local actName = DJCFrame._GetDjcObjUniqueId(action_config)
+        local djcObj = DJCFrame:New(actName)
+        -- 补充设置当前对象全局配置信息
+        DJCFrame._SetDjcObjGlobalCfg(djcObj, action_config)
+        --发送请求
+        djcObj.Request:Get(
+            DJCConfigs.NET.BUY_REQUEST,
+            buy_config,
+            function(tbResp) -- 拉取成功回调
+                -- 检查活动配置参数
+                if not djcObj.Model:CheckValidityAndProcess(tbResp, DJCConfigs.NET.DJC_REQUEST, djcObj.Configs) then
+                    DJCUtil.Error(DJCConfigs.MSG.ACT_INFO_ERROR)
+                    return
+                end
+                DJCUtil.PrintTb(tbResp, "tbResp=====")
+                -- 人民币支付
+                if tonumber(buy_config.paytype) == 2 then
+                    if tbResp["ret"] == "0" then
+                        if EventDispatcher.HasEventListener(Common.GAME_COMMAND) == true then
+                            EventDispatcher.RemoveEventListener(Common.GAME_COMMAND, DJCFrame.OnGameCommand)
+                        end
+                        EventDispatcher.AddEventListener(Common.GAME_COMMAND, DJCFrame.OnGameCommand, callback)
+                        DJCFrame.RMBOrder(djcObj, buy_config, tbResp)
+                    else
+                        callback(
+                            false,
+                            {
+                                ["data"] = tbResp
+                            }
+                        )
+                    end
+                else
+                    -- 代币支付
+                    callback(
+                        true,
+                        {
+                            ["data"] = tbResp
+                        }
+                    )
+                end
+            end,
+            function(tbResp) -- 拉取失败回调
+                if callback then
+                    callback(
+                        false,
+                        {
+                            ["data"] = tbResp
+                        }
+                    )
+                end
+            end
+        )
+    end
+end
+
+-----------------------------------------------------------------------------
+-- desc 获取当前活动请求的潘多拉全局唯一id
+-- @return table 包体table
+-----------------------------------------------------------------------------
+function DJCFrame._GetDjcObjUniqueId(action_config)
+    return action_config["bizCode"] .. "_" .. action_config["actStyle"] .. "_" .. action_config["channelId"]
+end
+
+-----------------------------------------------------------------------------
+-- desc 补充设置全局配置信息
+-- @return table 包体table
+-----------------------------------------------------------------------------
+function DJCFrame._SetDjcObjGlobalCfg(djcObj, action_config)
+    djcObj.Configs.BASE["MODULE_ID"] = action_config["channelId"] or djcObj.Configs.BASE["MODULE_ID"]
+    --上报使用
+    djcObj.Configs.BASE["COOKIE_NAME_PRE"] =
+        DJCFrame._GetDjcObjUniqueId(action_config) or djcObj.Configs.BASE["COOKIE_NAME_PRE"]
+    --海神活动id
+    djcObj.Configs.BASE["DJC_ACT_ID"] = action_config["djcActId"] or djcObj.Configs.BASE["DJC_ACT_ID"]
+
+    djcObj.Configs.BASE["CHANNEL_ID"] = action_config["channelId"] or djcObj.Configs.BASE["CHANNEL_ID"]
+    djcObj.Configs.BASE["SERVICE_NAME"] = action_config["bizCode"] or djcObj.Configs.BASE["SERVICE_NAME"]
+    djcObj.Configs.BASE["ACT_STYLE"] = action_config["actStyle"] or djcObj.Configs.BASE["ACT_STYLE"]
+    djcObj.Configs.BASE["AMSACT_ID"] = action_config["iActivityId"] or djcObj.Configs.BASE["AMSACT_ID"]
+    djcObj.Configs.BASE["INFO_ID"] = action_config["info_id"] or djcObj.Configs.BASE["INFO_ID"]
+end
+
+function DJCFrame.CheckRequestConfig(action_config)
+    if
+        action_config ~= nil and action_config.bizCode ~= nil and action_config.actStyle ~= nil and
+            action_config.channelId ~= nil
+     then
+        return true
+    else
+        return false
+    end
+end
+
+return DJCFrame

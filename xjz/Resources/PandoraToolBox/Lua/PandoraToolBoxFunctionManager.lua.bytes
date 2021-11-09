@@ -1,0 +1,172 @@
+require "Common"
+require "./PandoraToolBoxHelperTools"
+require "StringTool"
+
+PandoraToolBoxFunctionManager = { }
+local CSharpInterface = com.tencent.pandora.CSharpInterface;
+local contentKey = "functionTable"
+local paramKey = "functionDefaultParamsTable"
+local functionSettings = { [contentKey] = { }, [paramKey] = { } };
+
+-- 按钮gameObect和按钮名称对应表
+local buttonFunctionContentTable = { };
+local currentFunction = { ["functionContent"] = "", ["functionParams"] = "", ["functionDefaultParams"] = "", }
+local panel;
+function PandoraToolBoxFunctionManager.Init(panelGameObject)
+    panel = panelGameObject;
+    PandoraToolBoxHelperTools.UpdateLocalConfig(PandoraToolBoxSettings.functionConfigLuaFileName, PandoraToolBoxSettings.functionConfigCookieName)
+    local jsonSettings = Common.ReadCookie(PandoraToolBoxSettings.functionConfigCookieName);
+    if jsonSettings == "" then
+        return
+    end
+    functionSettings = JsonManager.DecodeJson(jsonSettings)
+
+    PandoraToolBoxHelperTools.CreateButtonList(functionSettings, contentKey, paramKey, panel.functionButtonTemplate, panel.functionGrid, PandoraToolBoxFunctionManager.OnFunctionButtonClick, PandoraToolBoxFunctionManager.OnFunctionDeleteButtonClick, buttonFunctionContentTable);
+
+    PandoraToolBoxHelperTools.SortButton(buttonFunctionContentTable, panel.functionGrid);
+end
+
+-- region 函数区
+function PandoraToolBoxFunctionManager.AddFunction()
+    local isFunctionValid, functionName, functionContent, functionParams, defaultFunctionParams = PandoraToolBoxFunctionManager.ReadFunctionConfig();
+    if isFunctionValid == false then
+        return
+    end
+    local func = functionContent .. "(" .. functionParams .. ")"
+    if PandoraToolBoxHelperTools.IsContentInTable(functionSettings[contentKey], functionName, func) == true then
+        return
+    end
+    functionSettings[contentKey][functionName] = func
+    functionSettings[paramKey][functionName] = defaultFunctionParams
+
+    -- 写入
+    local jsonSettings = JsonManager.EncodeJson(functionSettings)
+    Common.WriteCookie(PandoraToolBoxSettings.functionConfigCookieName, jsonSettings)
+
+    -- 添加button
+    PandoraToolBoxHelperTools.AddButton(functionName, func, defaultFunctionParams, panel.functionButtonTemplate, panel.functionGrid, PandoraToolBoxFunctionManager.OnFunctionButtonClick, PandoraToolBoxFunctionManager.OnFunctionDeleteButtonClick, buttonFunctionContentTable);
+
+    PandoraToolBoxHelperTools.SortButton(buttonFunctionContentTable, panel.functionGrid);
+end
+
+function PandoraToolBoxFunctionManager.OnFunctionButtonClick(go)
+    local functionTable = buttonFunctionContentTable[go];
+    local func = functionTable["content"];
+    local functionDefaultParams = functionTable["params"];
+    -- 拆分函数名和函数参数
+    local index1, index2 = string.find(func, "%b()");
+    local functionContent = string.sub(func, 1, index1 - 1)
+    local functionParams = string.sub(func, index1 + 1, index2 - 1)
+
+    -- 赋值给当前函数
+    currentFunction.functionContent = functionContent
+    currentFunction.functionParams = functionParams
+    currentFunction.functionDefaultParams = functionDefaultParams
+    -- 将函数定义显示在右边栏中
+    PandoraToolBoxFunctionManager.ShowFunction(go,functionContent,functionParams,functionDefaultParams);
+end
+
+function PandoraToolBoxFunctionManager.ShowFunction(go,functionContent,functionParams,functionDefaultParams)
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.UGUI then
+        panel.functionNameInput.text = go.name
+        panel.functionContentInput.text = functionContent
+        panel.functionParamsInput.text = functionParams
+        panel.defaultFunctionParamsInput.text = functionDefaultParams
+        return;
+    end
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        panel.functionNameInput.value = go.name
+        panel.functionContentInput.value = functionContent
+        panel.functionParamsInput.value = functionParams
+        panel.defaultFunctionParamsInput.value = functionDefaultParams
+        return;
+    end
+end
+
+function PandoraToolBoxFunctionManager.OnFunctionDeleteButtonClick(go)
+    local functionButtonGameobject = go.transform.parent.gameObject;
+    buttonFunctionContentTable[functionButtonGameobject] = nil
+    local functionName = functionButtonGameobject.name;
+    functionSettings[contentKey][functionName] = nil
+    functionSettings[paramKey][functionName] = nil
+    local jsonSettings = JsonManager.EncodeJson(functionSettings)
+    Common.WriteCookie(PandoraToolBoxSettings.functionConfigCookieName, jsonSettings)
+    UnityEngine.Object.DestroyImmediate(functionButtonGameobject);
+    -- ngui版本需要
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        panel.functionGrid:GetComponent("UIGrid"):Reposition();
+    end
+end
+
+function PandoraToolBoxFunctionManager.ExecuteFunction()
+    local isFunctionValid, functionName, functionContent, functionParams, defaultFunctionParams = PandoraToolBoxFunctionManager.ReadFunctionConfig();
+    if isFunctionValid == false then
+        return
+    end
+    if functionParams == PandoraToolBoxSettings.functionEmptyParams then
+        PandoraToolBoxHelperTools.CallLuaFunc(functionContent)
+        return
+    end
+    if functionParams == currentFunction["functionParams"] and defaultFunctionParams == PandoraToolBoxSettings.functionEmptyDefaultParams then
+        PandoraToolBoxHelperTools.ShowCommonTips(PandoraToolBoxSettings.functionParamsInvalidTips)
+        return
+    end
+    if functionParams ~= currentFunction["functionParams"] then
+        functionParamsTable = PandoraToolBoxFunctionManager.ProcessFunctionParams(StringTool.Split(functionParams, ","));
+        PandoraToolBoxHelperTools.CallLuaFunc(functionContent, unpack(functionParamsTable))
+        return
+    end
+
+    functionParamsTable = PandoraToolBoxFunctionManager.ProcessFunctionParams(StringTool.Split(defaultFunctionParams, ","));
+    --处理参数，兼容空字符参数
+    PandoraToolBoxHelperTools.CallLuaFunc(functionContent, unpack(functionParamsTable))
+end
+
+--参数为空使用空格表示
+function PandoraToolBoxFunctionManager.ProcessFunctionParams(originalParasTbl)
+    local result = {};
+    for i,v in ipairs(originalParasTbl) do 
+        table.insert(result,PandoraToolBoxHelperTools.TrimSpace(v));
+    end
+    return result;
+end
+
+function PandoraToolBoxFunctionManager.ReadFunctionConfig()
+    local functionName,functionContent,functionParams,defaultFunctionParams; 
+
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.UGUI then
+        functionName = PandoraToolBoxHelperTools.TrimSpace(panel.functionNameInput.text);
+        functionContent = PandoraToolBoxHelperTools.TrimSpace(panel.functionContentInput.text);
+        functionParams = panel.functionParamsInput.text;
+        defaultFunctionParams = panel.defaultFunctionParamsInput.text
+    end
+    if PandoraToolBoxSettings.uiType == PandoraToolBoxSettings.UiType.NGUI then
+        functionName = PandoraToolBoxHelperTools.TrimSpace(panel.functionNameInput.value);
+        functionContent = PandoraToolBoxHelperTools.TrimSpace(panel.functionContentInput.value);
+        functionParams = panel.functionParamsInput.value;
+        defaultFunctionParams = panel.defaultFunctionParamsInput.value
+    end
+
+    if PandoraToolBoxHelperTools.IsContentValid(functionName, PandoraToolBoxSettings.functionNameInvalidTips) == false then
+        return false, "", "", "", ""
+    end
+
+    if PandoraToolBoxHelperTools.IsContentValid(functionContent, PandoraToolBoxSettings.functionContentInvalidTips) == false then
+        return false, "", "", "", ""
+    end
+
+    if PandoraToolBoxHelperTools.TrimSpace(functionParams) == "" then
+        functionParams = PandoraToolBoxSettings.functionEmptyParams
+    end
+
+    if PandoraToolBoxHelperTools.TrimSpace(defaultFunctionParams) == "" then
+        defaultFunctionParams = PandoraToolBoxSettings.functionEmptyDefaultParams
+    end
+    return true, functionName, functionContent, functionParams, defaultFunctionParams
+end
+
+function PandoraToolBoxFunctionManager.Clear()
+    buttonFunctionContentTable = { };
+    panel = nil;
+end
+-- endregion

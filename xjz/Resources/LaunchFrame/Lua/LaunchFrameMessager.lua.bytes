@@ -1,0 +1,214 @@
+require "Common"
+require "Logger"
+require "JsonManager"
+require "EventDispatcher"
+
+LaunchFrameMessager = {} 
+
+-- 【标准投放协议】https://docs.qq.com/sheet/DWnFubHZ5ZFpIdUtt?tab=6uzci4
+
+
+
+----------------------------------------------------------------------------------------------------------------------
+------------------------------------------------ 给游戏发协议，封装一层 ------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------
+function LaunchFrameMessager.CallGame(tbl)
+    Common.CallGame(JsonManager.EncodeJson(tbl))
+    return {ret = 0, msg = "ok"}
+end
+
+
+
+----------------------------------------------------------------------------------------------------------------------
+-------------------------------------- 灵犀主面板入口协议: 投放场景1 登录弹出（拍脸） ------------------------------------
+--------------------------------------------------- 错误码：-19XX -----------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------
+-- 拍脸准备
+function LaunchFrameMessager.PopReady(switchName, ext, tbParam)
+    local callTable = {
+        type                = 'pandoraPop',                         -- 固定
+        content             = tostring(tbParam.content),            -- 活动的唯一key，也就是传入的switchName
+        isTemplate          = '1',                                  -- 固定
+    }
+    if ext~=nil and ext.pandoraPop ~=nil then
+        callTable = LaunchFrameTools.MergeTable(callTable,ext.pandoraPop)
+    end
+    Common.TablePrinter(callTable, "<color=#03E721>LaunchFrameMessager.PopReady</color>")
+    LaunchFrameTools.ColorLogInfo(switchName, "[发送协议：拍脸添加入口]" .. JsonManager.EncodeJson(callTable))
+    LaunchFrameMessager.CallGame(callTable)
+    return {ret = 0, msg = "ok"}
+end
+
+-- 拍脸关闭
+function LaunchFrameMessager.pandoraClosed(switchName, ext, tbParam)
+    local callTable = {
+        type                = 'pandoraClosed',                      -- 固定
+        content             = tostring(tbParam.content),            -- 活动的唯一key，也就是传入的switchName
+        isTemplate          = '1',                                  -- 固定
+    }
+    if ext~=nil and ext.pandoraClosed ~=nil then
+        callTable = LaunchFrameTools.MergeTable(callTable,ext.pandoraClosed)
+    end
+    Common.TablePrinter(callTable, "<color=#03E721>LaunchFrameMessager.PopClose</color>")
+    LaunchFrameTools.ColorLogInfo(switchName, "[发送协议：拍脸活动关闭]" ..JsonManager.EncodeJson(callTable))
+    LaunchFrameMessager.CallGame(callTable)
+    return {ret = 0, msg = "ok"}
+end
+
+
+----------------------------------------------------------------------------------------------------------------------
+------------------------------------------ 灵犀主面板入口协议: 投放场景2 icon ------------------------------------------
+--------------------------------------------------- 错误码：-29XX -----------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------
+--设置活动入口
+function LaunchFrameMessager.IconReady(switchName, ext, tbParam, content)
+    local callTable = {
+        type               = 'pandoraShowEntrance',                 -- 固定
+        content            = tostring(content),                     -- 显示活动入口（1）、移除活动入口（0）
+        module             = tostring(tbParam.module),              -- icon的module标准值为hall，但也有可能因业务差异，由灵犀管理端适配成其他值
+        tab                = tostring(tbParam.tab),                 -- 活动的唯一key，也就是传入的switchName
+        sortId             = 0,                                     -- 对icon来说没用，默认就写0
+        showName           = tostring(tbParam.showName),            -- 要显示的名字，一般游戏是展示在游戏图片下面的一行字，比如：神秘商店
+        iconName           = "",                                    -- 【暂未实现】游戏图集取的图片的名称，比如：atlas_xxx_xxx.png。有iconUrl，icon图片会展示iconUrl的。否则会展示iconName对应的图片。
+        iconUrl            = tostring(tbParam.iconUrl),             -- 用户传的图标的网络地址。有iconUrl，icon图片会展示iconUrl的。否则会展示iconName对应的图片
+        countdown          = tostring(tbParam.countdown),           -- 倒计时，单位为秒。默认为-1（不启用倒计时）
+        countdownIconHide  = tostring(tbParam.countdownIconHide),   -- 倒计时结束，是否隐藏图标，0，隐藏，1，展示
+        isTemplate         = '1',                                   -- 固定
+    }
+    if ext~=nil and ext.pandoraShowEntrance ~=nil then
+        callTable = LaunchFrameTools.MergeTable(callTable,ext.pandoraShowEntrance)
+    end
+    Common.TablePrinter(callTable, "<color=#03E721>LaunchFrameMessager.IconReady</color>")
+    LaunchFrameTools.ColorLogInfo(switchName, "[发送协议：icon添加入口]" .. JsonManager.EncodeJson(callTable))
+    LaunchFrameMessager.CallGame(callTable)
+    return {ret = 0, msg = "ok"}
+end
+
+--设置活动入口红点
+function LaunchFrameMessager.IconRedpoint(switchName, ext, tbParam, content)
+    local callTable = {
+        type                = 'pandoraShowRedpoint',                -- 固定
+        content             = tostring(content),                    -- 红点出现（1），红点消失（0）
+        module              = tostring(tbParam.module),             -- icon的module标准值为hall，但也有可能因业务差异，由灵犀管理端适配成其他值
+        tab                 = tostring(tbParam.tab),                -- 活动的唯一key，也就是传入的switchName
+        isTemplate          = '1',                                  -- 固定
+    }
+    if ext~=nil and ext.pandoraShowRedpoint ~=nil then
+        callTable = LaunchFrameTools.MergeTable(callTable,ext.pandoraShowRedpoint)
+    end
+    Common.TablePrinter(callTable, "<color=#03E721>LaunchFrameMessager.IconRedpoint</color>")
+    LaunchFrameTools.ColorLogInfo(switchName, "[发送协议：icon红点]" .. JsonManager.EncodeJson(callTable))
+    LaunchFrameMessager.CallGame(callTable)
+    return {ret = 0, msg = "ok"}
+end
+
+
+
+----------------------------------------------------------------------------------------------------------------------
+-------------------------------------- 灵犀主面板入口协议: 投放场景3 潘多拉落地页 ---------------------------------------
+--------------------------------------------------- 错误码：-39XX -----------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------
+--设置活动入口
+function LaunchFrameMessager.pandoraTabReady(switchName, ext, tbParam, content)
+    local callTable = {
+        type                = 'pandoraShowMatrix',                  -- 固定
+        content             = tostring(content),                    -- 显示活动入口（1）、移除活动入口（0）
+        module              = tostring(tbParam.module),             -- 潘多拉落地页的module标准值为pandoraTab，但也有可能因业务差异，由灵犀管理端适配成其他值
+        tab                 = tostring(tbParam.tab),                -- 活动的唯一key，也就是传入的switchName
+        tag                 = tostring(tbParam.tabCornerMark),      -- 当前活动在列表中显示的标签，比如：热门、新手、火爆，等
+        sortId              = tostring(tbParam.tabOrder),           -- 当前活动在列表中的顺序（以此首先排序，大的在前面；相同时，以tab的字母排序，a在前面）
+        showName            = tostring(tbParam.showName),           -- 当前活动在列表中显示的文本（落地页左侧tab上显示的内容），比如：神秘商店、新手任务，等
+        targetUrl           = tostring(tbParam.targetUrl),          -- 点击当前活动后的响应方式。可选值为：文本活动图片url（网络图），0（自定义活动面板）
+        countdown           = tostring(tbParam.countdown),          -- 倒计时，单位为秒。默认为-1（不启用倒计时）
+        isTemplate          = '1',                                  -- 固定
+    }
+    if ext~=nil and ext.pandoraShowMatrix ~=nil then
+        callTable = LaunchFrameTools.MergeTable(callTable,ext.pandoraShowMatrix)
+    end
+    Common.TablePrinter(callTable, "<color=#03E721>LaunchFrameMessager.pandoraTabReady</color>")
+    LaunchFrameTools.ColorLogInfo(switchName, "[发送协议：潘多拉落地页添加入口]" .. JsonManager.EncodeJson(callTable))
+    if PandoraMatrixManager~=nil and type(PandoraMatrixManager.pandoraShowMatrix) =="function" then
+        PandoraMatrixManager.pandoraShowMatrix(callTable)
+        return {ret = 0, msg = "ok"}
+    else
+        return {ret = -3901, msg = "当前业务暂未接入潘多拉标准落地页（pandoraTabReady协议）。" .. LaunchFrameTools.LaunchPandoraTabDeveloper}
+    end
+end
+
+--设置活动入口红点
+function LaunchFrameMessager.pandoraTabRedpoint(switchName, ext, tbParam, content)
+    local callTable = {
+        type                = 'pandoraRedpointMatrix',              -- 固定
+        content             = tostring(content),                    -- 红点出现（1），红点消失（0）
+        module              = tostring(tbParam.module),             -- 潘多拉落地页的module标准值为pandoraTab，但也有可能因业务差异，由灵犀管理端适配成其他值
+        tab                 = tostring(tbParam.tab),                -- 活动的唯一key，也就是传入的switchName
+        isTemplate          = '1',                                  -- 固定
+    }    
+    if ext~=nil and ext.pandoraRedpointMatrix ~=nil then
+        callTable = LaunchFrameTools.MergeTable(callTable,ext.pandoraRedpointMatrix)
+    end
+    LaunchFrameMessager.CallGame(callTable)
+    Common.TablePrinter(callTable, "<color=#03E721>LaunchFrameMessager.pandoraTabRedpoint</color>")
+    LaunchFrameTools.ColorLogInfo(switchName, "[发送协议：潘多拉落地页红点]" .. JsonManager.EncodeJson(callTable))
+    if PandoraMatrixManager~=nil and type(PandoraMatrixManager.pandoraRedpointMatrix) =="function" then
+        PandoraMatrixManager.pandoraRedpointMatrix(callTable)
+        return {ret = 0, msg = "ok"}
+    else
+        return {ret = -3902, msg = "当前业务暂未接入潘多拉标准落地页（pandoraTabRedpoint协议）。" .. LaunchFrameTools.LaunchPandoraTabDeveloper}
+    end
+end
+
+
+
+----------------------------------------------------------------------------------------------------------------------
+--------------------------------------- 灵犀主面板入口协议: 投放场景4 游戏落地页 ----------------------------------------
+--------------------------------------------------- 错误码：-49XX -----------------------------------------------------
+----------------------------------------------------------------------------------------------------------------------
+-- 设置活动入口
+function LaunchFrameMessager.gameTabReady(switchName, ext, tbParam, content)
+    local callTable = {
+        type                = 'gameShowMatrix',                     -- 固定
+        content             = tostring(content),                    -- 显示活动入口（1）、移除活动入口（0）
+        module              = tostring(tbParam.module),             -- 游戏落地页的module标准值为gameTab，但也有可能因业务差异，由灵犀管理端适配成其他值
+        tab                 = tostring(tbParam.tab),                -- 活动的唯一key，也就是传入的switchName
+        tag                 = tostring(tbParam.tabCornerMark),      -- 当前活动在列表中显示的标签，比如：热门、新手、火爆，等
+        sortId              = tostring(tbParam.tabOrder),           -- 当前活动在列表中的顺序（以此首先排序，大的在前面；相同时，以tab的字母排序，a在前面）
+        showName            = tostring(tbParam.showName),           -- 当前活动在列表中显示的文本（落地页左侧tab上显示的内容），比如：神秘商店、新手任务，等
+        targetUrl           = tostring(tbParam.targetUrl),          -- 点击当前活动后的响应方式。可选值为：文本活动图片url（网络图），0（自定义活动面板）
+        countdown           = tostring(tbParam.countdown),          -- 倒计时，单位为秒。默认为-1（不启用倒计时）
+        isTemplate          = '1',                                  -- 固定
+    }
+    if ext~=nil and ext.gameShowMatrix ~=nil then
+        callTable = LaunchFrameTools.MergeTable(callTable,ext.gameShowMatrix)
+    end
+    Common.TablePrinter(callTable, "<color=#03E721>LaunchFrameMessager.gameTabReady</color>")
+    LaunchFrameTools.ColorLogInfo(switchName, "[发送协议：游戏落地页添加入口]" ..JsonManager.EncodeJson(callTable))
+    if GameMatrixManager~=nil and type(GameMatrixManager.pandoraShowMatrix) =="function" then
+        GameMatrixManager.pandoraShowMatrix(callTable)
+        return {ret = 0, msg = "ok"}
+    else
+        return {ret = -4901, msg = "当前业务暂未接入游戏标准落地页（gameTabReady协议）。" .. LaunchFrameTools.LaunchPandoraTabDeveloper}
+    end
+end
+
+-- 设置活动入口红点
+function LaunchFrameMessager.gameTabRedpoint(switchName, ext, tbParam, content)
+    local callTable = {
+        type                = 'gameRedpointMatrix',                 -- 固定
+        content             = tostring(content),                    -- 红点出现（1），红点消失（0）
+        module              = tostring(tbParam.module),             -- 游戏落地页的module标准值为gameTab，但也有可能因业务差异，由灵犀管理端适配成其他值
+        tab                 = tostring(tbParam.tab),                -- 活动的唯一key，也就是传入的switchName
+        isTemplate          = '1',                                  -- 固定
+    }
+    if ext~=nil and ext.gameRedpointMatrix ~=nil then
+        callTable = LaunchFrameTools.MergeTable(callTable,ext.gameRedpointMatrix)
+    end
+    Common.TablePrinter(callTable, "<color=#03E721>LaunchFrameMessager.gameTabRedpoint</color>")
+    LaunchFrameTools.ColorLogInfo(switchName, "[发送协议：游戏落地页红点]" .. JsonManager.EncodeJson(callTable))
+    if GameMatrixManager~=nil and type(GameMatrixManager.pandoraRedpointMatrix) =="function" then
+        GameMatrixManager.pandoraRedpointMatrix(callTable)
+        return {ret = 0, msg = "ok"}
+    else
+        return {ret = -4902, msg = "当前业务暂未接入游戏标准落地页（gameTabRedpoint协议）。" .. LaunchFrameTools.LaunchPandoraTabDeveloper}
+    end
+end

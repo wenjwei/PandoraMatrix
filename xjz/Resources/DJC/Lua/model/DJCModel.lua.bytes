@@ -1,0 +1,63 @@
+--------------------------------------------------------- START -------------------------------------------------------
+-- 活动 Model，用于存储和活动相关的信息，包括活动拉取数据、红点数据等
+-- 该文件默认包含 API 如下：
+-- @method CheckValidityAndProcess : 检查拉取的活动数据 & 预处理
+-- @method GetActData              : 获取活动数据
+-- ...
+---------------------------------------------------------- END --------------------------------------------------------
+local Model = {}
+local Util = require "DJCUtil"
+
+-----------------------------------------------------------------------------
+-- desc 检查拉取的活动数据（潘多拉管理端配置、道聚城后台拉取数据等）是否正常 & 预处理（预处理图片、数据分割、归类等）
+-- @param tbResp : table 解析后的响应数据
+-- @return         bool 是否通过数据检查
+-----------------------------------------------------------------------------
+function Model:CheckValidityAndProcess(tbResp, type, Configs)
+    if Configs.NET.INIT_REQUEST == type then
+        local tbActData = {}
+        tbActData["sPaasId"] = tbResp["paas_id"] or tbResp["act_id"] or Configs.BASE.AMSACT_ID
+        tbActData["iFlowId"] = ""
+        tbActData["sTitle"] = tbResp["act_title"]
+        tbActData["iInfoId"] = tbResp["info_id"]
+        tbActData["sPriority"] = tbResp["act_priority"]
+        tbActData["sTag"] = tbResp["tag"]
+        tbActData["sContent"] = tbResp["act_content"]
+        tbActData["iShowBeginTime"] = tonumber(tbResp["act_beg_time"]) -- 拿到的是时间戳整数，具体的格式通过 os.date() 自行处理
+        tbActData["iShowEndTime"] = tonumber(tbResp["act_end_time"]) -- 拿到的是时间戳整数，具体的格式通过 os.date() 自行处理
+        Configs.BASE.INFO_ID = tbResp["info_id"] -- 潘多拉活动 ID
+        Configs.BASE.DJC_ACT_ID = Configs.BASE.DJC_ACT_ID or tbResp["daojucheng_id"] -- 道聚城 ID
+        Configs.BASE.AMSACT_ID = tbResp["act_id"]
+        --ams活动ID
+        Configs.BASE.WEIGHT = tonumber(tbResp["act_priority"]) or 1 -- 限时活动入口权重
+        tbActData["djc_resp"] = tbResp["djc_goods_res_resp"]
+        tbActData["ams_resp"] = tbResp["ams_resp"]
+        self.tbActData = Util.DeepCopy(tbActData)
+
+        --ams流程配置
+        if self.tbActData["ams_resp"]["flow_alias"] ~= nil then
+            self.tbActData["flowAlias"] = {}
+            for key, value in pairs(self.tbActData["ams_resp"]["flow_alias"]) do
+                self.tbActData["flowAlias"][key] = value
+            end
+        end
+    end
+    return true
+end
+
+-----------------------------------------------------------------------------
+-- desc 获取活动拉取的数据(特殊处理，可以放在此处)
+-- @return table 活动拉取的数据
+-----------------------------------------------------------------------------
+function Model:GetActData()
+    return self.tbActData or {}
+end
+
+function Model:New(o)
+    o = o or {}
+    setmetatable(o, self)
+    self.__index = self
+    return o
+end
+
+return Model

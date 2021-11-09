@@ -1,0 +1,11 @@
+
+local WINDOWS_EDITOR = 7;
+if UnityEngine.Application.platform == WINDOWS_EDITOR then
+  require "PandoraLuaDebugMonitor";
+end
+
+local CSharpInterface = com.tencent.pandora.CSharpInterface;
+local pandoraSettingDebug = CSharpInterface.IsDebug();
+if pandoraSettingDebug == true then
+    require("LuaPanda").start("127.0.0.1",8818);
+end

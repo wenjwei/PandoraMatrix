@@ -1,0 +1,201 @@
+local Path = require "PathTools";
+
+local CSharpInterface = com.tencent.pandora.CSharpInterface;
+
+local package_loaded = package.loaded;
+local package_preload = package.preload or {};
+
+
+local GlobalCommon = Common;
+local GlobalLoger = GlobalCommon.GetLogger();
+
+local function require(modname)
+    if package_preload[modname] then
+        return package_preload[modname]();
+    end
+    if not package_loaded[modname] then
+        local loader = assert(loadfile(modname))
+        if loader == nil then
+            error("unable to load module "  .. tostring(modname))
+        end
+        package_loaded[modname] = true;
+        local env = getfenv(3);
+        setfenv(loader,env)
+        local res = loader(modname);
+        if res ~= nil then
+            package_loaded[modname] = res;
+        else
+            package_loaded[modname] = true;
+        end
+        -- Logger.DEBUG(" require package_loaded["..modname.."] " .. tostring(package_loaded[modname]))
+    end
+    return package_loaded[modname]
+end
+
+local function GetCreatePanelEvent(group,panelName)
+    return "CreatePanel_" .. tostring(group) .. tostring(panelName)
+end
+
+local function CreatePanelCallback(group,panelName,jsonStr)
+    local panelGameObject = nil;
+    local json = JsonManager.DecodeJson(jsonStr);
+    if json ~= nil and json["RetCode"] ~= nil and tonumber(json["RetCode"]) == 0 and json["PanelName"] ~= nil then
+        local innerPanelName = json["PanelName"];
+        panelGameObject = GlobalCommon.GetPanel(innerPanelName);
+        local createPanelEventType = GetCreatePanelEvent(group,panelName);
+        EventDispatcher.DispatchEvent(createPanelEventType, panelGameObject);
+        EventDispatcher.RemoveEventAllListener(createPanelEventType);
+    end
+end
+
+
+local function CreatePanel(group,panelName, callback, ...)
+	local id = GlobalCommon.GenCallId();
+	local args = {...}
+    EventDispatcher.AddEventListener(GetCreatePanelEvent(group,panelName), callback,...);
+    EventDispatcher.AddEventListener(id, function (jsonStr)
+        CreatePanelCallback(group,panelName,jsonStr)
+    end);
+    CSharpInterface.CreatePanel(id, tostring(group) .."_" ..tostring(panelName));
+end
+
+
+local SandBox = {}
+
+function SandBox:New()
+	local o = {};
+	setmetatable(o, self);
+	self.__index = self;
+	return o;
+end
+
+local function GetActionName(loader)
+    local path = debug.getinfo(loader, "S").source:gsub("\\","/")
+    local filename = Path.strippath(path);
+    return filename:gsub(".lua.bytes","");
+end
+
+function SandBox:LoadAction(group, modname)
+    self.group = group;
+    self.modname = modname;
+    if not package_loaded[modname] then
+        local loader = assert(loadfile(modname))
+        self.modname = GetActionName(loader)
+        local env = self:GetEnv();
+        setfenv(loader,env)
+
+        xpcall(function() 
+            local ret = loader(modname);
+            package_loaded[self.modname] = ret and ret or true;
+            package_loaded[modname] = ret and ret or true;
+        end,
+        function ( err  )
+            Logger.ERROR("unable to load module " ..modname .. tostring(err))
+        end)
+
+        -- local status, ret = pcall(loader, modname)
+        -- if not status then
+        --     Logger.ERROR("unable to load module " ..modname .. tostring(ret) )
+        --     return;
+        -- end
+        -- Logger.DEBUG("package_loaded["..self.modname.."] " .. tostring(package_loaded[self.modname]))
+    end
+end
+
+function SandBox:Injection(group, modname)
+    self.group = group;
+    self.modname = modname;
+    Logger.WARN("LoadAction " .. tostring(group) .. "  " .. tostring(modname))
+    local env = self:GetEnv();
+    setfenv(2,env)
+end
+
+local function ScriptPath()
+    local str = debug.getinfo(3, "S").source:sub(2)
+    return str:gsub("\\","/")
+end
+
+
+
+function SandBox:GetEnv()
+    local SandBoxLogger = {
+        DEBUG = function(msg)
+            GlobalLoger.DEBUG(string.format("\[%s\]%s",self.modname,msg),self.group)
+        end,
+        INFO = function(msg)
+            GlobalLoger.INFO(string.format("\[%s\]%s",self.modname,msg),self.group)
+        end,
+        WARN = function(msg)
+            GlobalLoger.WARN(string.format("\[%s\]%s",self.modname,msg),self.group)
+        end,
+        ERROR = function(msg)
+            GlobalLoger.ERROR(string.format("\[%s\]%s",self.modname,msg),self.group)
+        end,
+        TablePrinter = function(t, name)
+            GlobalLoger.TablePrinter(t, string.format("\[%s\]%s",self.modname,tostring(name)),self.group)
+        end,
+    }
+
+    local SandBoxCommon = {
+        CreatePanel = function(panelName, callback, ...)
+            CreatePanel(self.modname,panelName, callback, ...)
+        end,
+        ShowImage = function(panelName, ...)
+            GlobalCommon.ShowImage(self.modname.."_"..panelName, ...)
+        end,
+        ShowPortrait = function(panelName, ...)
+            GlobalCommon.ShowPortrait(self.modname.."_"..panelName, ...)
+        end,
+        GetPanel = function(panelName)
+            return GlobalCommon.GetPanel(self.modname.."_"..panelName)
+        end,
+        DestroyPanel = function(panelName)
+            return GlobalCommon.DestroyPanel(self.modname.."_"..panelName)
+        end,
+        SetPanelParent = function(panelName,panelParent)
+            return CSharpInterface.SetPanelParent(self.modname.."_"..panelName,panelParent)
+        end,
+        GetLogger = function()
+            return SandBoxLogger
+        end,
+
+    }
+    setmetatable(SandBoxCommon, {__index = GlobalCommon})
+
+    local globalG = _G
+    local _G = {}
+    self.env = {
+        require = function (modname)
+            local head = string.sub(modname,1,2);
+            -- Logger.WARN("LoadAction require " .. tostring(modname) .. "  " .. self.modname)
+
+            if head == "./" or head == ".." then
+                local scriptPath = ScriptPath();
+                local localPath = Path.currentpath(scriptPath);
+                local absPath = Path.abspath(modname,localPath);
+                -- Logger.WARN("LoadAction ScriptPath " .. scriptPath   .. " " .. localPath  .. " " .. absPath);
+                return require(Path.normpath(Path.actionname (scriptPath)  .."/".. absPath))
+            else
+                if modname == self.modname .. "Monitor" then
+                    return require(self.modname .. "/" .. modname)
+                else
+                    return require(modname)
+                end
+            end
+        end;
+
+        checkSandBox = function ()
+            Logger.WARN("SandBox succ " )
+        end,
+        Common = SandBoxCommon,
+        Logger = SandBoxLogger,
+    }
+    self.env.dofile = self.env.require;
+    self.env._G = _G;
+    setmetatable(self.env, {__index = globalG})
+    setmetatable(_G, {__index = self.env})
+    return self.env;
+end
+
+
+return SandBox;
