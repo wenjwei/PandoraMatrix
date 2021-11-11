@@ -1,0 +1,13 @@
+﻿using System;
+using com.tencent.pandora;
+using System.Collections.Generic;
+public class Lua_UnityEngine_UI_Selectable_Transition : LuaObject {
+	static public void reg(IntPtr l) {
+		getEnumTable(l,"UnityEngine.UI.Selectable.Transition");
+		addMember(l,0,"None");
+		addMember(l,1,"ColorTint");
+		addMember(l,2,"SpriteSwap");
+		addMember(l,3,"Animation");
+		LuaDLL.pua_pop(l, 1);
+	}
+}
